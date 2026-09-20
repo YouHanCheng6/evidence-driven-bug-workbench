@@ -1,0 +1,11 @@
+{
+  "synthetic": true,
+  "id": 1001,
+  "title": "示例库存组件在库存为零时显示空白",
+  "actual": "输入零时显示空字符串",
+  "expected": "输入零应显示 0 items；未加载时继续显示 Loading",
+  "steps": ["调用示例 formatInventory(0)", "检查返回文本"],
+  "product": "虚构示例项目",
+  "auto_repair": false,
+  "note": "作者构造的示例，不来自实际工单，不表示已运行外部工作流"
+}

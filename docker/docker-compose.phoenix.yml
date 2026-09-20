@@ -1,0 +1,34 @@
+services:
+  phoenix-volume-init:
+    image: arizephoenix/phoenix:version-20.4.0-nonroot
+    user: "0"
+    entrypoint: ["/usr/bin/python3.13", "-c"]
+    command:
+      - |
+        import os
+        root = "/mnt/data"
+        os.chown(root, 65532, 65532)
+        for current, directories, files in os.walk(root):
+            os.chown(current, 65532, 65532)
+            for name in directories + files:
+                os.chown(os.path.join(current, name), 65532, 65532)
+    volumes:
+      - deerflow-phoenix-data:/mnt/data
+
+  phoenix:
+    image: arizephoenix/phoenix:version-20.4.0-nonroot
+    depends_on:
+      phoenix-volume-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6006:6006"
+    environment:
+      PHOENIX_WORKING_DIR: /mnt/data
+      PHOENIX_TELEMETRY_ENABLED: "false"
+      PHOENIX_ALLOW_EXTERNAL_RESOURCES: "false"
+    volumes:
+      - deerflow-phoenix-data:/mnt/data
+
+volumes:
+  deerflow-phoenix-data:

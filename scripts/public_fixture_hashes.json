@@ -1,0 +1,20 @@
+{
+  "backend/tests/test_support_bundle.py": "ba4cf1bb8694849e4d5208b5e05239d86a9ffeb364e6e5496ab7b7afc5857929",
+  "backend/tests/test_credential_loader.py": "f008f65c6a536e09037ef23a942f04dcc0116d73a804e544b48e3c90c3517e8d",
+  "backend/tests/test_setup_agent_http_e2e_real_server.py": "96d31d28c51b394a003bd7587de62938c4b1e0a1c3a292b235530303a88c2daf",
+  "backend/tests/test_skill_request_scoped_secrets.py": "6fe1a627a91eb1cebf9e0dc923d76329316d1c930e98e50bc76ab10d4a539287",
+  "backend/tests/test_channel_connections_repository.py": "e7013cb9a9a07309ae1bb205a6d57d94e481999a1fd9623bc28d0ca04830c673",
+  "backend/tests/test_slack_channel_connections.py": "4c9c66d87d0ad429987a17e44dca42af942a375efbcb65d52d6c239249f3e428",
+  "backend/tests/test_skill_manage_tool.py": "f2a78513b0e6dbebf1464ae53bb52c922de4e70de03452b3664f19ddffafb3d5",
+  "backend/tests/test_skill_review_core.py": "8132444371ba69b4c4a668a56bc6a6dadf0e964e3d9269765563e7a55355d2bd",
+  "backend/tests/test_skills_custom_router.py": "95c3688a02a6327b08cab6afda00a33cdc0e5d2fdd1b4c8a0a3ee02070826309",
+  "backend/tests/test_skills_installer.py": "39913a5ac177ac09c676d3d9f99b19f339b79c6abbe9bb9fda515215a2d8b2b0",
+  "backend/tests/test_skillscan_native.py": "2583ad60b282d90a3f4ccbc842aa9e19afbf7d59c7415cca6120a9576e56055a",
+  "backend/tests/test_aio_sandbox_readiness.py": "14d296530dcae85bb47ebb8fa4987ce6b3c03b44b0bda5cdb0e989530683e584",
+  "backend/tests/test_brave_tools.py": "4598abcc3e7038a06594a1b9e57f06276018009352ea25c84e6f516b7fb7903e",
+  "backend/tests/test_browserless_client.py": "664d51de0c00412e26b3ec9485de457862d82b5bfda39c31548f7731327b9fd0",
+  "backend/tests/test_crawl4ai_tools.py": "f37236cdafb286be0f8365ca08919d2b0ff48384e085fc7f16b265549af1eb30",
+  "backend/tests/test_fastcrw_tools.py": "3d3af27658162397d3e18d5b52a5ae3498a9942a91e60e41bcbcf97cb9e6ddaa",
+  "backend/tests/test_serper_tools.py": "d9ec4869948c889530043fdb39f91ce00fe624395c5611b3b59daff3aa10b7b6",
+  "frontend/tests/unit/dev-origins.test.ts": "c115c587a361e917eab3d4d45bc2cffeb3bcbae93d0e28923778045ecde10b55"
+}

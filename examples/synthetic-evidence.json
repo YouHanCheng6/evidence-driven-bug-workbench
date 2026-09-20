@@ -1,0 +1,16 @@
+{
+  "synthetic": true,
+  "purpose": "Illustrative evidence only, not a captured Agent Server event",
+  "sources": [
+    {"id": "DEMO-S1", "path": "examples/sample-project/inventory.ts", "line_start": 2, "line_end": 5, "role": "consumer_and_precondition", "quote": "if (count === null || count === undefined)"},
+    {"id": "DEMO-S2", "path": "examples/sample-project/inventory.ts", "line_start": 6, "line_end": 8, "role": "mechanism", "quote": "if (!count)"},
+    {"id": "DEMO-S3", "path": "examples/sample-project/inventory.ts", "line_start": 9, "line_end": 9, "role": "expected_consumer_path", "quote": "return `${count} items`;"}
+  ],
+  "assessment": {
+    "requirement_status": "incorrect",
+    "mechanism_status": "confirmed_static_example",
+    "runtime_trigger_status": "not_observed_in_external_runtime",
+    "repair_scope_status": "illustrated_not_executed"
+  },
+  "note": "展示字段解释，不是可直接发送给真实工作流的机器协议对象"
+}
