@@ -16,9 +16,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
-  ProductClarificationCard,
-  type ProductClarificationSubmission,
-} from "@/components/workspace/bugs/product-clarification-card";
+  VideoClarificationCard,
+  type VideoClarificationSubmission,
+} from "@/components/workspace/bugs/video-clarification-card";
 import { SourceEvidencePanel } from "@/components/workspace/bugs/source-evidence-panel";
 import {
   WorkspaceBody,
@@ -191,7 +191,7 @@ export default function BugWorkbenchPage() {
   }
 
   async function resumeWithClarification(
-    submission: ProductClarificationSubmission,
+    submission: VideoClarificationSubmission,
   ) {
     if (!workflow) return;
     setSubmittingClarification(true);
@@ -206,7 +206,7 @@ export default function BugWorkbenchPage() {
       setError(
         requestError instanceof Error
           ? requestError.message
-          : "无法提交修改目标确认。",
+          : "无法提交视频分析选择。",
       );
     } finally {
       setSubmittingClarification(false);
@@ -942,12 +942,10 @@ export default function BugWorkbenchPage() {
                   ) : null}
 
                   {workflow?.status === "awaiting_clarification" &&
-                  (workflow.clarification_type === "product" ||
-                    workflow.clarification_type === "video") &&
+                  workflow.clarification_type === "video" &&
                   workflow.clarification_stage === "pre_analysis" ? (
-                    <ProductClarificationCard
+                    <VideoClarificationCard
                       clarification={workflow.clarification ?? {}}
-                      clarificationType={workflow.clarification_type}
                       submitting={submittingClarification}
                       onSubmit={resumeWithClarification}
                     />

@@ -88,6 +88,7 @@ async def run_oneshot_llm_result(
     thread_id: str | None = None,
     max_tokens: int | None = None,
     thinking_enabled: bool = False,
+    reasoning_effort: str | None = None,
     streaming: bool = False,
 ) -> OneShotLLMResult:
     """Run one direct model call and retain its provider token metadata."""
@@ -95,7 +96,7 @@ async def run_oneshot_llm_result(
         name=model_name,
         thinking_enabled=thinking_enabled,
         app_config=app_config,
-        model_overrides={"max_tokens": max_tokens},
+        model_overrides={"max_tokens": max_tokens, "reasoning_effort": reasoning_effort},
     )
     invoke_config: dict = {"run_name": run_name}
     inject_langfuse_metadata(

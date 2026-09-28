@@ -75,17 +75,27 @@ def _headers(owner: str) -> dict[str, str]:
     return headers
 
 
-def _short_report_fields(report: str) -> tuple[str, str]:
+def _short_report_fields(report: str) -> tuple[str, str, str]:
     fourth = report.split("四、修改范围与其他端风险", 1)[-1] if "四、修改范围与其他端风险" in report else ""
     cooperation_scope = fourth.split("本地代码修改", 1)[0]
     main = re.search(r"(?m)^\s*主要涉及端\s*[:：]\s*(.+)$", cooperation_scope)
     primary = main.group(1).strip()[:100] if main else "报告未给出主要涉及端"
+    pending_match = re.search(r"(?m)^[ \t]*待确认输入[ \t]*[:：][ \t]*(\S.*)$", cooperation_scope)
+    pending = pending_match.group(1).strip()[:180] if pending_match else "报告未标注"
     cooperating = []
     for label, field in (("嵌入式", "嵌入式配合"), ("后端", "后端配合")):
         match = re.search(rf"(?m)^\s*{field}\s*[:：]\s*(.*)$", cooperation_scope)
         if match and match.group(1).strip() and not re.match(r"^(?:无|无需|不需要|未见)", match.group(1).strip()):
             cooperating.append(label)
-    return primary, "、".join(cooperating) if cooperating else "无"
+    if cooperating:
+        cooperation = "、".join(cooperating)
+    elif pending == "无":
+        cooperation = "无"
+    elif pending == "报告未标注":
+        cooperation = "报告未标注"
+    else:
+        cooperation = "见待确认输入"
+    return primary, cooperation, pending
 
 
 async def _save(store: ThreadMetaStore, batch_id: str, owner: str, state: dict[str, Any]) -> None:
@@ -93,9 +103,49 @@ async def _save(store: ThreadMetaStore, batch_id: str, owner: str, state: dict[s
     await store.update_metadata(batch_id, {"bug_batch": state}, user_id=owner)
 
 
-def _display_bug_ids(ids: list[int], *, limit: int = 50) -> str:
-    shown = "、".join(str(identifier) for identifier in ids[:limit])
-    return shown if len(ids) <= limit else f"{shown} 等 {len(ids)} 个"
+async def _cancel_requested(store: ThreadMetaStore, batch_id: str, owner: str) -> bool:
+    root = await store.get(batch_id, user_id=owner)
+    metadata = root.get("metadata") if isinstance(root, dict) else None
+    return isinstance(metadata, dict) and bool(metadata.get("bug_batch_cancel_requested_at"))
+
+
+async def _resolve_batch_id(
+    store: ThreadMetaStore,
+    *,
+    thread_id: str,
+    user_id: str,
+    owner: str,
+    batch_id: str | None,
+) -> str | None:
+    if isinstance(batch_id, str) and batch_id.strip():
+        return batch_id.strip()
+    thread = await store.get(thread_id, user_id=user_id)
+    current = thread.get("metadata", {}).get("zentao_bug_batch_id") if isinstance(thread, dict) else None
+    if isinstance(current, str) and current:
+        return current
+    offset = 0
+    while True:
+        rows = await store.search(limit=100, offset=offset, user_id=owner)
+        latest = next((row for row in rows if row.get("assistant_id") == "bug-batch"), None)
+        if latest is not None:
+            resolved = latest.get("thread_id")
+            return resolved if isinstance(resolved, str) else None
+        if len(rows) < 100:
+            return None
+        offset += 100
+
+
+def _batch_start_confirmation(batch_id: str, ids: list[int], *, selection_source: str, notification: str) -> str:
+    rows = [f"- #{identifier} — {'准备启动（starting）' if index == 0 else '排队中（queued）'}" for index, identifier in enumerate(ids)]
+    order = " → ".join(f"#{identifier}" for identifier in ids)
+    source = "当前消息明确编号" if selection_source == "explicit_ids" else "当前会话已保存集合"
+    return (
+        "批次已启动，正在串行分析，初始状态如下：\n"
+        + "\n".join(rows)
+        + f"\n批次 ID：`{batch_id}`；共 {len(ids)} 个 Bug；选择来源：{source}。"
+        + f"\n运行顺序：{order}。前一个结束后才启动下一个。"
+        + f"\n{notification}。你可以稍后使用该批次 ID 查询最新进度。"
+    )
 
 
 async def start_selected_bug_batch(
@@ -165,12 +215,7 @@ async def start_selected_bug_batch(
         await store.update_metadata(thread_id, {"zentao_bug_batch_id": batch_id}, user_id=user_id)
         launch_bug_batch(store, owner, batch_id)
         notification = "完成后会在当前飞书会话发送简短汇总" if source.get("provider") == "feishu" else "完成后可向主 Agent 查询简短汇总"
-        return (
-            f"已创建批次 {batch_id}，共 {len(ids)} 个 Bug；"
-            f"本次实际运行：{_display_bug_ids(ids)}；"
-            f"选择来源：{'当前消息明确编号' if selection_source == 'explicit_ids' else '当前会话已保存集合'}；"
-            f"后台将按上述顺序逐个运行，前一个结束后才启动下一个；{notification}。"
-        )
+        return _batch_start_confirmation(batch_id, ids, selection_source=selection_source, notification=notification)
     except (ValueError, OSError) as exc:
         return f"未启动批量分析：{exc}"
 
@@ -206,11 +251,106 @@ async def read_bug_batch(runtime: Any, *, batch_id: str | None = None, offset: i
         return f"无法读取 Bug 批次：{exc}"
 
 
+async def cancel_bug_batch(runtime: Any, *, batch_id: str | None = None) -> str:
+    """Persistently stop one batch, its active workflow, and queued items."""
+    try:
+        thread_id, user_id, owner = _runtime_identity(runtime)
+        store = make_thread_store(get_session_factory(), runtime.store)
+        resolved_id = await _resolve_batch_id(
+            store,
+            thread_id=thread_id,
+            user_id=user_id,
+            owner=owner,
+            batch_id=batch_id,
+        )
+        if resolved_id is None:
+            return "当前账号没有可停止的 Bug 批次。"
+        root = await store.get(resolved_id, user_id=owner)
+        metadata = root.get("metadata") if isinstance(root, dict) else None
+        state = metadata.get("bug_batch") if isinstance(metadata, dict) else None
+        if not isinstance(state, dict):
+            return f"批次 {resolved_id} 不存在或无权访问。"
+        if state.get("status") == "cancelled":
+            return f"批次 {resolved_id} 已停止，无需重复操作。"
+        if state.get("status") == "completed":
+            return f"批次 {resolved_id} 已结束，没有仍在运行的分析。"
+
+        items = [item for item in state.get("items", []) if isinstance(item, dict)]
+        active_workflow_ids: list[str] = []
+        first_pending_index: int | None = None
+        for index, item in enumerate(items):
+            if item.get("status") in _BATCH_TERMINAL or item.get("status") == "launch_failed":
+                continue
+            if first_pending_index is None:
+                first_pending_index = index
+            workflow_id = item.get("workflow_id")
+            if isinstance(workflow_id, str) and workflow_id:
+                active_workflow_ids.append(workflow_id)
+            item["status"] = "cancelled"
+        # A create request can be in flight before its response stores the ID.
+        # The Workbench ID is deterministic from the batch idempotency key, so
+        # include only that first serial item as a possible active child.
+        if first_pending_index is not None and not active_workflow_ids:
+            identifier = int(items[first_pending_index]["bug_id"])
+            active_workflow_ids.append(
+                f"bug-workflow-{uuid.uuid5(uuid.NAMESPACE_URL, f'{owner}:{resolved_id}:{identifier}').hex}"
+            )
+
+        stopped_at = datetime.now(UTC).isoformat()
+        state["status"] = "cancelled"
+        state["cancelled_at"] = stopped_at
+        state["notification_sent"] = True
+        await store.update_metadata(
+            resolved_id,
+            {
+                "bug_batch": state,
+                "bug_batch_cancel_requested_at": stopped_at,
+            },
+            user_id=owner,
+        )
+
+        local_task = _TASKS.get(resolved_id)
+        if local_task is not None and not local_task.done():
+            local_task.cancel()
+            await asyncio.gather(local_task, return_exceptions=True)
+
+        stopped_workflows: list[str] = []
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            for workflow_id in dict.fromkeys(active_workflow_ids):
+                try:
+                    response = await client.post(
+                        f"{_gateway_url()}/api/bug-workflows/{workflow_id}/cancel",
+                        headers=_headers(owner),
+                    )
+                    if response.status_code == 404:
+                        continue
+                    response.raise_for_status()
+                    stopped_workflows.append(workflow_id)
+                except (httpx.RequestError, httpx.HTTPStatusError):
+                    logger.warning("Could not cancel workflow %s for batch %s", workflow_id, resolved_id, exc_info=True)
+
+        # Reassert the terminal snapshot after all local task cancellation has
+        # settled, so an in-flight pre-cancel poll cannot leave a stale
+        # ``running`` presentation even though the durable marker is authoritative.
+        await store.update_metadata(
+            resolved_id,
+            {"bug_batch": state, "bug_batch_cancel_requested_at": stopped_at},
+            user_id=owner,
+        )
+
+        cancelled_ids = [int(item["bug_id"]) for item in items if item.get("status") == "cancelled"]
+        ids_text = "、".join(f"#{identifier}" for identifier in cancelled_ids) or "无"
+        child_text = f"；已中断 {len(stopped_workflows)} 个运行中的工作流/Codex 调查" if stopped_workflows else "；当前没有可确认仍在运行的子工作流"
+        return f"已停止批次 {resolved_id}{child_text}；排队项不会再启动。已取消：{ids_text}。"
+    except (ValueError, OSError) as exc:
+        return f"停止 Bug 批次失败：{exc}"
+
+
 def _format_item(item: Mapping[str, Any]) -> str:
     identifier = item.get("bug_id")
     status = str(item.get("status") or "queued")
     if status == "note_written":
-        return f"#{identifier}｜主要涉及端：{item.get('primary_side') or '报告未给出'}｜需配合：{item.get('cooperation') or '无'}"
+        return f"#{identifier}｜主要涉及端：{item.get('primary_side') or '报告未给出'}｜需配合：{item.get('cooperation') or '报告未标注'}｜待确认输入：{item.get('pending_input') or '报告未标注'}"
     if status == "awaiting_clarification":
         return f"#{identifier}｜待补充信息；请到 Bug 工作台处理"
     if status in {"awaiting_evidence", "awaiting_repair_choice", "awaiting_acceptance"}:
@@ -267,6 +407,8 @@ async def _process_item(
     lock: asyncio.Lock,
 ) -> None:
     async with _GLOBAL_BUG_SLOTS:
+        if await _cancel_requested(store, state["id"], owner):
+            return
         identifier = int(item["bug_id"])
         if item.get("status") in _BATCH_TERMINAL or item.get("status") == "launch_failed":
             return
@@ -306,6 +448,8 @@ async def _process_item(
         last_marker: tuple[Any, Any, Any] | None = None
         last_progress = time.monotonic()
         while True:
+            if await _cancel_requested(store, state["id"], owner):
+                return
             try:
                 async with httpx.AsyncClient(timeout=20.0) as client:
                     response = await client.get(f"{_gateway_url()}/api/bug-workflows/{workflow_id}", headers=_headers(owner))
@@ -322,7 +466,7 @@ async def _process_item(
                     async with lock:
                         item["status"] = status
                         if status == "note_written":
-                            item["primary_side"], item["cooperation"] = _short_report_fields(str(payload.get("analysis_report") or ""))
+                            item["primary_side"], item["cooperation"], item["pending_input"] = _short_report_fields(str(payload.get("analysis_report") or ""))
                         await _save(store, state["id"], owner, state)
                 if status in _BATCH_TERMINAL:
                     return
@@ -343,11 +487,15 @@ async def _run_batch(store: ThreadMetaStore, owner: str, batch_id: str) -> None:
     state = root.get("metadata", {}).get("bug_batch") if isinstance(root, dict) else None
     if not isinstance(state, dict):
         return
+    if await _cancel_requested(store, batch_id, owner):
+        return
     if state.get("status") == "running":
         items = [item for item in state.get("items", []) if isinstance(item, dict)]
         lock = asyncio.Lock()
 
         for item in items:
+            if await _cancel_requested(store, batch_id, owner):
+                return
             if item.get("status") in _BATCH_TERMINAL or item.get("status") == "launch_failed":
                 continue
             while True:
@@ -360,8 +508,9 @@ async def _run_batch(store: ThreadMetaStore, owner: str, batch_id: str) -> None:
                     await asyncio.sleep(15)
                     continue
                 break
-        state["status"] = "completed"
-        await _save(store, batch_id, owner, state)
+        if not await _cancel_requested(store, batch_id, owner):
+            state["status"] = "completed"
+            await _save(store, batch_id, owner, state)
     if state.get("status") == "completed" and not state.get("notification_sent"):
         if await _notify_finished(owner, state):
             state["notification_sent"] = True
@@ -390,9 +539,12 @@ async def resume_pending_bug_batches(store: ThreadMetaStore) -> int:
     while True:
         rows = await store.search(limit=100, offset=offset, user_id=None)
         for row in rows:
-            state = row.get("metadata", {}).get("bug_batch") if isinstance(row.get("metadata"), dict) else None
+            metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else None
+            state = metadata.get("bug_batch") if isinstance(metadata, dict) else None
             owner = row.get("user_id")
-            if row.get("assistant_id") != "bug-batch" or not isinstance(state, dict) or not isinstance(owner, str):
+            if row.get("assistant_id") != "bug-batch" or not isinstance(metadata, dict) or not isinstance(state, dict) or not isinstance(owner, str):
+                continue
+            if metadata.get("bug_batch_cancel_requested_at"):
                 continue
             if state.get("status") == "running" or (state.get("status") == "completed" and not state.get("notification_sent")):
                 launch_bug_batch(store, owner, state["id"])

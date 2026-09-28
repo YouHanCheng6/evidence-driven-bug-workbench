@@ -129,8 +129,8 @@ def _prepare(source: Path, destination: Path, *, include_native: bool) -> tuple[
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-root", type=Path, default=Path(".deer-flow/tabby/composite-repositories"))
-    parser.add_argument("--sample_mobile_repo", type=Path, default=Path("/home/example_user/projects/sample_mobile_repo"))
-    parser.add_argument("--harmony-rn", type=Path, default=Path("/home/example_user/sample_platform_repo"))
+    parser.add_argument("--sample_mobile_repo", type=Path, default=Path("/home/example_user Workbench/projects/sample_mobile_repo"))
+    parser.add_argument("--harmony-rn", type=Path, default=Path("/home/example_user Workbench/sample_platform_repo"))
     args = parser.parse_args()
     output_root = args.output_root.expanduser().resolve()
     for name, source, include_native in (

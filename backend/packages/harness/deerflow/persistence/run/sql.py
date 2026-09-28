@@ -358,7 +358,9 @@ class RunRepository(RunStore):
             "updated_at": datetime.now(UTC),
         }
         if last_ai_message is not None:
-            values["last_ai_message"] = last_ai_message[:2000]
+            # Terminal delivery reads this field, so a successful run must keep
+            # the complete final answer.  Progress snapshots stay bounded below.
+            values["last_ai_message"] = last_ai_message
         if first_human_message is not None:
             values["first_human_message"] = first_human_message[:2000]
         if error is not None:

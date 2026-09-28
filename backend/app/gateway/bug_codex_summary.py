@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 import shutil
 import time
 from collections.abc import Awaitable, Callable, Mapping
@@ -27,6 +28,7 @@ _REPORT_SECTIONS = (
     "四、修改范围与其他端风险",
 )
 _CODE_INTELLIGENCE_RESULT_PREFIX = "CODE_INTELLIGENCE_RESULT="
+_GIT_HISTORY_RESULT_PREFIX = "GIT_HISTORY_RESULT="
 
 
 def _code_intelligence_result(output: str) -> dict[str, Any] | None:
@@ -45,6 +47,36 @@ def _code_intelligence_result(output: str) -> dict[str, Any] | None:
             "candidates": [{key: candidate[key] for key in ("path", "line", "view_start", "view_end") if key in candidate} for candidate in candidates if isinstance(candidate, dict)][:6]
         }
     return None
+
+
+def _git_history_result(output: str) -> dict[str, Any] | None:
+    """Persist bounded history provenance without copying patches into workflow state."""
+    for line in output.splitlines():
+        if not line.startswith(_GIT_HISTORY_RESULT_PREFIX):
+            continue
+        try:
+            value = json.loads(line.removeprefix(_GIT_HISTORY_RESULT_PREFIX))
+        except json.JSONDecodeError:
+            return {"engine": "git_history", "status": "invalid_result", "diagnostics": ["runtime_result_json_invalid"]}
+        if not isinstance(value, dict):
+            return None
+        commits = value.get("commits") if isinstance(value.get("commits"), list) else []
+        return {
+            "engine": "git_history",
+            "status": value.get("status"),
+            "path": value.get("path"),
+            "diagnostics": value.get("diagnostics") if isinstance(value.get("diagnostics"), list) else [],
+            "commits": [
+                {key: commit[key] for key in ("sha", "committed_at", "subject") if key in commit}
+                for commit in commits
+                if isinstance(commit, dict)
+            ][:4],
+        }
+    return None
+
+
+def _investigation_trace_result(output: str) -> dict[str, Any] | None:
+    return _code_intelligence_result(output) or _git_history_result(output)
 
 
 @dataclass(frozen=True)
@@ -94,6 +126,11 @@ async def investigate_bug_with_codex(
             f"只读调查禅道 Bug #{bug_id}。当前目录是 {repository} 的源码视图。你负责从工单事实开始调查，并在本轮结束时直接输出完整中文报告。",
             "先从消费者与真实调用/状态边建立现象形成链；按需追到最近的失败边界。每份源码读取只回答会改变根因、责任端、修改位置或外部配合的一个问题。"
             "DeerFlow 给出的 Tabby 候选源码片段、业务规则和日志摘录都是可验证或推翻的线索，不是源码证明；先在当前源码中核对候选，相关才沿调用或状态边继续，无关就丢弃。未闭合的设备/云端边要明确保留。证据足够解释当前本地边界时停止横向搜索并提交报告。",
+            "文案问题须用当前页面或系统表面的真实入口，闭合到实际消费者和对应资源；同名文案、事件 ID 或资源 key 在 RN、Android、iOS 中出现只证明候选存在。前置材料列出的候选实现层必须分别核对已有候选或明确记录未命中，不能仅凭先找到 RN 资源就判定 RN 归属。"
+            "工单预期结果区域中的明确目标文案，默认适用于工单正文明确列出的全部修改对象；出现`推送`、`后台配置`等实现方式不等于把适用范围缩小为仅推送，只有证据明确写明`仅`用于某端或某渠道时才能缩小。已有明确目标文案时，第四部分必须对已定位的本地资源给出具体修改前后，不得把同一目标文案再次列为待 PRD/产品确认。",
+            "结论若依赖主题、开关等可变状态，先沿当前产品的初始化和后续赋值确认实际生效值；架构线索中的运行时配置路径与赋值行只是待核对线索，不得把首次赋值当最终值。",
+            "如果已经通过 moduleConfig、路由或真实调用关系确认了本单业务入口，但当前入口已经不存在工单所述失败机制，准备因相同文案或相似条件转向另一个功能页面前，先对这个真实入口文件运行一次"
+            "`python .deerflow-git-history-runner.py --path <当前视图内文件> --max-commits 4`。历史差异直接对应工单并已移除失败机制时，结论应写当前检出版本已修复，不得再用其他产品或功能的相似代码补出新根因；历史不匹配时才继续当前源码调查。相似代码只有另有当前调用/配置可达证据时才能归因。",
             "可以使用有界 grep、源码读取与视图中的代码/日志查询脚本。优先核对 DeerFlow 给出的最多五个 Tabby 候选；已读精确符号后，只有定义、引用或类型关系会改变判断时才用"
             "`.deerflow-source-query-runner.py`窄查，并按返回的 path/line/view_start/view_end 读取一个候选；不要把资源 key 当代码符号反复查询。"
             "不要反复扩大范围。运行日志须核对同设备同事务，搜索命中和模型自述不能当作已读源码。"
@@ -101,10 +138,16 @@ async def investigate_bug_with_codex(
             "每次工具输出只保留决定当前判断的片段：文本检索命中最多 30 行，源码窗口每次最多 100 行，日志每次最多 50 行；"
             "工具调用的 max_output_tokens 不得超过 2000，不批量输出目录、整文件或整份日志。需要更多上下文时再按具体缺口窄读。",
             "最终只写四个一级标题：一、分析结论；二、责任端与责任层；三、根本原因及源码证据；四、修改范围与其他端风险。第三部分保留关键源码仓库路径、行号、短原句及具体尚未闭合的边。",
-            "第四部分第一行必须是`主要涉及端：`；已证需要嵌入式或后端核对时，分别写`嵌入式配合：`或`后端配合：`与要核对的具体同步边，没有该证据则省略；最后写`本地代码修改：`。不要另写客户端配合或内部 target/确定性计数。",
-            "本地确有可靠修改时，给具体文件、行号、`修改前：`和`修改后：`完整代码，并解释它如何改变本单失败路径；"
-            "否则写`暂无可确定的本地代码替换：`及仍缺的生产端、同步边或接口证据。任何替换都必须核对实际接口签名、触发条件和因果前提，不能用兜底值或只读消费者冒充根因修复。",
-            f"用户可见源码路径只写 {repository}/...，不写镜像绝对路径或凭据。报告简洁，约 3600 字以内。",
+            "第四部分第一行必须是`主要涉及端：`；已证需要嵌入式或后端核对时，分别写`嵌入式配合：`或`后端配合：`与要核对的具体同步边，没有该证据则省略；"
+            "在`本地代码修改：`之前固定写一行`待确认输入：`，逐项写明提供方与具体所需信息（如`PRD：目标图；设计：素材`），确无待确认输入时写`待确认输入：无`；最后写`本地代码修改：`。"
+            "不要另写客户端配合或内部 target/确定性计数。",
+            "第四部分沿第三部分已证事实写具体问题、处理位置和下一步；同一单中已能修改和仍需确认的部分应分别交付。"
+            "本地有可靠替换时，给具体文件、行号、`修改前：`和`修改后：`完整代码，并解释如何改变失败路径；"
+            "已定位修改处但缺产品目标、设计素材或接口契约时，写清已证问题、修改处、缺什么、由谁提供及到位后如何修改，"
+            "不得用`暂无可确定的本地代码替换`概括整单。当前源码已修则写无需重复修改及待核对的发布版本；"
+            "责任边界未定则写已证失败边和需谁确认什么，不提前指定单一主责。"
+            "仅对尚不能确定替换的部分写明缺口。任何替换都必须核对实际接口签名、触发条件和因果前提，不能用兜底值或只读消费者冒充根因修复。",
+            f"第三、第四部分中的每个源码引用和修改文件都必须始终写成完整的 `{repository}/仓库内相对路径:行号`，重复引用也不能缩写；禁止使用 `.../`、省略公共目录、只写文件名或从中间目录开始。不写镜像绝对路径或凭据。报告简洁，约 3600 字以内。",
             "工单原始事实：\n" + ticket,
             "DeerFlow 前置材料（线索，不是已证明根因）：\n" + context,
         )
@@ -148,7 +191,9 @@ async def investigate_bug_with_codex(
                 "--scope <related-file-or-directory> --max-results 12 once; "
                 "the runner is stateless and returns bounded path/line ranges, so read one chosen range directly before citing it. "
                 "Treat every prepared Tabby snippet as a retrieval candidate, not causal proof; "
-                "verify it in the current checkout before relying on it."
+                "verify it in the current checkout before relying on it. If the verified business entry no longer contains the reported failure, "
+                "run python .deerflow-git-history-runner.py --path <verified-current-file> --max-commits 4 once before pivoting to another feature with similar text. "
+                "A directly matching removal means the checked-out version is already fixed; do not invent a current root cause from unrelated similar code."
             ),
             service_name="deerflow_bug_investigation",
         )
@@ -179,7 +224,7 @@ async def investigate_bug_with_codex(
                             elif item.phase is None:
                                 unknown_phase_response = item.text or unknown_phase_response
                         elif isinstance(item, CommandExecutionThreadItem):
-                            trace = _code_intelligence_result(item.aggregated_output or "")
+                            trace = _investigation_trace_result(item.aggregated_output or "")
                             if trace is not None:
                                 code_intelligence_trace.append(trace)
                                 code_intelligence_trace = code_intelligence_trace[-12:]
@@ -234,8 +279,9 @@ async def investigate_bug_with_codex(
         if _report_format_error(report) is not None:
             correction = (
                 "只纠正报告的呈现格式，不重新调查或新增事实。格式问题：" + str(_report_format_error(report)) + "。请在原会话已读证据基础上重新输出完整四段；第四段首行`主要涉及端：`，"
-                "有证据才写`嵌入式配合：`或`后端配合：`，最后写`本地代码修改：`。"
-                "可确定替换才成对给`修改前：`和`修改后：`；否则明确缺口。"
+                "有证据才写`嵌入式配合：`或`后端配合：`；在`本地代码修改：`之前固定写`待确认输入：提供方：具体信息`，无缺口时写`待确认输入：无`，最后写`本地代码修改：`。"
+                "同一单中已能修改和仍需确认的部分分别写清；已定位修改处但缺目标、素材或契约时写明提供方与到位后的动作，当前源码已修则写明发布核对，"
+                "不得用`暂无可确定的本地代码替换`概括整单。可确定替换才成对给`修改前：`和`修改后：`；不新增事实。"
             )
             async with asyncio.timeout(min(timeout_seconds, 300)):
                 corrected = await thread.run(correction, effort=ReasoningEffort(reasoning_effort))
@@ -289,6 +335,10 @@ def _report_format_error(value: str) -> str | None:
     fourth = value[positions[3] + len(_REPORT_SECTIONS[3]) :].strip()
     if not fourth.startswith("主要涉及端："):
         return "fourth_section_missing_main_side"
+    pending = re.search(r"(?m)^待确认输入：[ \t]*(\S.*)$", fourth)
+    local_change = fourth.find("本地代码修改：")
+    if pending is None or (local_change >= 0 and pending.start() > local_change):
+        return "fourth_section_missing_pending_input"
     if "本地代码修改：" not in fourth:
         return "fourth_section_missing_local_change"
     if "客户端配合：" in fourth:

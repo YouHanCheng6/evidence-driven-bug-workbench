@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import uuid
 from typing import Any, Literal
 
@@ -13,9 +12,9 @@ from sqlalchemy.exc import IntegrityError
 
 from app.gateway.bug_rollback import rollback_repair
 from app.gateway.bug_workflow import (
-    _build_confirmed_copy_scope,
     _public_bug_workflow_error,
     attach_workflow_task,
+    cancel_workflow_tasks,
     run_bug_workflow,
 )
 from app.gateway.bug_workflow_events import BugWorkflowActorSource, advance_bug_workflow
@@ -32,6 +31,9 @@ from deerflow.persistence.bug_workbench import read_bug_workbench
 
 router = APIRouter(prefix="/api/bug-workflows", tags=["bug-workflows"])
 logger = logging.getLogger(__name__)
+_TERMINAL_WORKFLOW_STATUSES = frozenset(
+    {"note_written", "skipped", "cancelled", "analysis_incomplete", "failed", "accepted", "rolled_back"}
+)
 
 
 def _summary_response(workflow: dict) -> BugWorkflowSummaryResponse:
@@ -151,7 +153,7 @@ def _response(workflow: dict) -> BugWorkflowResponse:
                 if key in source_retrieval
             }
         clarification = public_workflow.get("clarification")
-        if public_workflow.get("clarification_type") in {"product", "video"} and isinstance(clarification, dict):
+        if public_workflow.get("clarification_type") == "video" and isinstance(clarification, dict):
             options = _saved_clarification_options(clarification)
             public_workflow["clarification"] = {
                 **clarification,
@@ -196,62 +198,23 @@ def _saved_clarification_options(clarification: dict[str, Any]) -> list[dict[str
     return options
 
 
-def _resolve_product_clarification_submission(
+def _resolve_video_clarification_submission(
     clarification: dict[str, Any],
     *,
     option_id: str | None,
     answer: str,
 ) -> tuple[str, dict[str, Any]]:
-    """Return one canonical product target or an actionable 422 error."""
+    """Return one saved analyze/skip video decision without free-text inference."""
     options = _saved_clarification_options(clarification)
-    response_mode = str(clarification.get("response_mode") or ("choice" if options else "exact_text"))
     compact_answer = answer.strip()
-    if response_mode == "copy_scope":
-        if option_id:
-            raise HTTPException(status_code=422, detail="本题需要填写修改项、目标文案和明确不改项。")
-        if not compact_answer:
-            raise HTTPException(status_code=422, detail="请明确哪些文案需要修改、各自改成什么，以及哪些明确不改。")
-        return compact_answer, {"response_mode": "copy_scope", "value": compact_answer}
-    if response_mode == "choice":
-        if option_id == "other":
-            if clarification.get("allow_free_text") is False:
-                raise HTTPException(status_code=422, detail="请从已确认的互斥产品结果中选择一项。")
-            if not compact_answer:
-                raise HTTPException(status_code=422, detail="请输入其他完整文案。")
-            instruction = re.search(
-                r"^(?:(?:请|把|将)\s*)?(?:(?:Android|安卓|iOS|IOS|苹果端).{0,50})?(?:把|将|改为|改成|统一(?:显示)?为|显示为)|^(?:把|将).{1,80}(?:改为|改成|显示为)",
-                compact_answer,
-                re.IGNORECASE,
-            )
-            if instruction:
-                raise HTTPException(status_code=422, detail="请只填写其他选项对应的完整最终文案。")
-            return compact_answer, {"response_mode": "exact_text", "option_id": "other", "value": compact_answer}
-        selected = next((option for option in options if option["id"] == option_id), None)
-        # Old web/IM clients submit only text. Preserve exact saved-option
-        # values, but never interpret a sentence as a choice.
-        if selected is None and not option_id and compact_answer:
-            exact_matches = [option for option in options if option["value"] == compact_answer]
-            selected = exact_matches[0] if len(exact_matches) == 1 else None
-        if selected is None:
-            raise HTTPException(status_code=422, detail="请选择上方一个明确选项后再继续。")
-        value = selected["value"]
-        return value, {"response_mode": "choice", "option_id": selected["id"], "value": value}
-    if response_mode != "exact_text":
-        raise HTTPException(status_code=409, detail="产品目标确认方式无效，请刷新后重试。")
-    if option_id:
-        raise HTTPException(status_code=422, detail="本题需要填写修改后的完整文案。")
-    if not compact_answer:
-        raise HTTPException(status_code=422, detail="请输入修改后的完整文案。")
-    instruction = re.search(
-        r"^(?:(?:请|把|将)\s*)?(?:(?:Android|安卓|iOS|IOS|苹果端).{0,50})?(?:把|将|改为|改成|统一(?:显示)?为|显示为)|^(?:把|将).{1,80}(?:改为|改成|显示为)",
-        compact_answer,
-        re.IGNORECASE,
-    )
-    if instruction:
-        target_match = re.search(r"(?:改为|改成|统一(?:显示)?为|显示为)\s*[“\"']?(.+?)[”\"']?$", compact_answer)
-        example = target_match.group(1).strip("。；;，, ”\"'") if target_match else "修改后的完整文案"
-        raise HTTPException(status_code=422, detail=f"请只填写修改后的完整文案，例如：{example}。")
-    return compact_answer, {"response_mode": "exact_text", "option_id": None, "value": compact_answer}
+    selected = next((option for option in options if option["id"] == option_id), None)
+    if selected is None and not option_id and compact_answer:
+        exact_matches = [option for option in options if option["value"] == compact_answer]
+        selected = exact_matches[0] if len(exact_matches) == 1 else None
+    if selected is None or selected["value"] not in {"analyze", "skip"}:
+        raise HTTPException(status_code=422, detail="请选择分析视频或跳过视频。")
+    value = selected["value"]
+    return value, {"response_mode": "choice", "option_id": selected["id"], "value": value}
 
 
 @router.post("", response_model=BugWorkflowResponse, status_code=202)
@@ -360,7 +323,7 @@ async def get_active_bug_workflow(channel_key: str, request: Request) -> BugWork
         workflow = row.get("metadata", {}).get("bug_workflow")
         if isinstance(workflow, dict) and (
             workflow.get("status") in PERSISTED_RESUMABLE_STATUSES
-            or (workflow.get("status") == "awaiting_clarification" and workflow.get("clarification_type") in {"product", "video"} and workflow.get("clarification_stage") == "pre_analysis")
+            or (workflow.get("status") == "awaiting_clarification" and workflow.get("clarification_type") == "video" and workflow.get("clarification_stage") == "pre_analysis")
         ):
             return _response(workflow)
     return None
@@ -488,18 +451,18 @@ async def submit_bug_workflow_clarification(
     body: SubmitClarificationRequest,
     request: Request,
 ) -> BugWorkflowResponse:
-    """Resume after a retained pre-analysis product or video decision."""
+    """Resume after the retained pre-analysis video decision."""
     owner_user_id, workflow = await _get_workflow(request, workflow_id)
     if workflow.get("status") != "awaiting_clarification":
         raise HTTPException(status_code=409, detail="Bug workflow is not waiting for a clarification")
     route = workflow.get("route")
     clarification_type = workflow.get("clarification_type")
-    if route != "investigation" or clarification_type not in {"product", "video"} or workflow.get("clarification_stage") != "pre_analysis":
+    if route != "investigation" or clarification_type != "video" or workflow.get("clarification_stage") != "pre_analysis":
         raise HTTPException(status_code=409, detail="Bug workflow has an invalid clarification context")
     saved_clarification = workflow.get("clarification")
     if not isinstance(saved_clarification, dict):
         raise HTTPException(status_code=409, detail="Bug workflow is missing its clarification contract")
-    answer, clarification_response = _resolve_product_clarification_submission(
+    answer, clarification_response = _resolve_video_clarification_submission(
         saved_clarification,
         option_id=body.option_id,
         answer=body.answer,
@@ -514,32 +477,22 @@ async def submit_bug_workflow_clarification(
     if not isinstance(note_thread_id, str) or not note_thread_id:
         note_thread_id = f"bug-note-{uuid.uuid4().hex}"
     clarification_round = int(workflow.get("clarification_round", 0)) + 1
-    is_video_clarification = clarification_type == "video"
     resume_details = {
         "note_thread_id": note_thread_id,
         "clarification": None,
         "clarification_type": None,
         "clarification_round": clarification_round,
-        "clarification_answer": None if is_video_clarification else answer,
         "clarification_response": clarification_response,
+        "video_analysis_decision": answer,
     }
-    if is_video_clarification:
-        resume_details["video_analysis_decision"] = answer
-    else:
-        resume_details["product_clarification_completed"] = True
-        confirmed_copy_scope = _build_confirmed_copy_scope(saved_clarification, answer)
-        if confirmed_copy_scope is not None:
-            resume_details["confirmed_copy_scope"] = confirmed_copy_scope
-    resume_status = "routing" if is_video_clarification else "analyzing"
-    event_type = "video_analysis_confirmed" if is_video_clarification else "product_target_confirmed"
-    summary = ("确认分析视频" if answer == "analyze" else "确认跳过视频") if is_video_clarification else f"确认产品目标：{answer}"
+    summary = "确认分析视频" if answer == "analyze" else "确认跳过视频"
     resumed = await _persist_transition(
         request,
         workflow_id=workflow_id,
         owner_user_id=owner_user_id,
         workflow=workflow,
-        status=resume_status,
-        event_type=event_type,
+        status="routing",
+        event_type="video_analysis_confirmed",
         summary=summary,
         details=resume_details,
         thread_status="busy",
@@ -554,7 +507,6 @@ async def submit_bug_workflow_clarification(
             analysis_thread_id=analysis_thread_id,
             note_thread_id=note_thread_id,
             router_run_id=router_run_id if isinstance(router_run_id, str) else None,
-            clarification_answer=None if is_video_clarification else answer,
             clarification_round=clarification_round,
             bug_snapshot=workflow.get("bug_snapshot") if isinstance(workflow.get("bug_snapshot"), dict) else None,
             affected_clients=tuple(workflow.get("affected_clients", [])),
@@ -566,10 +518,13 @@ async def submit_bug_workflow_clarification(
 
 @router.post("/{workflow_id}/cancel", response_model=BugWorkflowResponse)
 async def cancel_bug_workflow(workflow_id: str, request: Request) -> BugWorkflowResponse:
-    """Stop only a workflow that is waiting for a human response."""
+    """Persist cancellation, then interrupt the process-local workflow/Codex handle."""
     owner_user_id, workflow = await _get_workflow(request, workflow_id)
-    if workflow.get("status") != "awaiting_clarification" or workflow.get("clarification_type") not in {"product", "video"}:
-        raise HTTPException(status_code=409, detail="Bug workflow is not waiting for a human response")
+    status = str(workflow.get("status") or "")
+    if status == "cancelled":
+        return _response(workflow)
+    if status in _TERMINAL_WORKFLOW_STATUSES:
+        raise HTTPException(status_code=409, detail="Bug workflow has already finished")
     cancelled = await _persist_transition(
         request,
         workflow_id=workflow_id,
@@ -578,8 +533,9 @@ async def cancel_bug_workflow(workflow_id: str, request: Request) -> BugWorkflow
         status="cancelled",
         event_type="workflow_cancelled",
         summary="取消当前 Bug 分析",
-        details={"clarification": None, "cancel_reason": "用户取消当前 Bug 分析"},
+        details={"clarification": None, "awaiting_clarification": False, "cancel_reason": "用户取消当前 Bug 分析"},
     )
+    await cancel_workflow_tasks(workflow_id)
     return _response(cancelled)
 
 

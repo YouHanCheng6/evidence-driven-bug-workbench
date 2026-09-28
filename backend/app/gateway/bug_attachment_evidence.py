@@ -12,7 +12,7 @@ import mimetypes
 import re
 import shutil
 import zipfile
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -72,6 +72,8 @@ def _public_asset(asset: dict[str, Any], *, status: str, name: str | None = None
     }
     if path:
         result["path"] = path
+    if asset.get("ticket_section") in {"actual", "expected"}:
+        result["ticket_section"] = asset["ticket_section"]
     if error:
         result["error"] = error
     return result
@@ -672,13 +674,14 @@ async def _extract_video_frames(video: Path) -> list[Path]:
     return sorted(video.parent.glob(f".{video.stem}-frame-*.jpg"))[:6]
 
 
-async def _default_visual_analyzer(paths: list[Path], *, thinking_enabled: bool = False) -> str:
+async def _default_visual_analyzer(paths: list[Path], *, ticket_sections: Mapping[str, str] | None = None, thinking_enabled: bool = False) -> str:
     blocks: list[dict[str, Any]] = [
         {
             "type": "text",
             "text": (
                 "这些图片来自同一个禅道 UI Bug。必须逐张判断 asset_role：actual_app_screenshot、cross_client_app_screenshot、"
                 "reference_table、expected_reference、desktop_document 或 supplementary_material。"
+                "若文件注明了禅道正文段落归属，该归属是工单事实：预期图只描述预期，实际图只描述实际；未注明时再根据图片判断。"
                 "不要识别、猜测或输出设备型号、操作系统、客户端平台、Native/RN 或仓库；这些由工单文字和源码调查的独立链路确认。"
                 "红框、箭头、高亮、下划线和批注是最高优先级证据：单独识别其中的文字、图片、图标、控件和视觉状态，"
                 "并保留少量页面、Tab、产品、横竖屏和操作路径上下文。每一个被标注的独立文案差异必须单独输出一个 item，"
@@ -707,7 +710,9 @@ async def _default_visual_analyzer(paths: list[Path], *, thinking_enabled: bool 
         if not payload or len(payload) > MAX_VISUAL_FILE_BYTES:
             continue
         media_type = mimetypes.guess_type(path.name)[0] or "image/jpeg"
-        blocks.append({"type": "text", "text": f"文件：{path.name}"})
+        section = (ticket_sections or {}).get(path.name)
+        section_label = "预期结果" if section == "expected" else "实际结果" if section == "actual" else "未标明"
+        blocks.append({"type": "text", "text": f"文件：{path.name}；禅道正文段落：{section_label}"})
         blocks.append({"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{base64.b64encode(payload).decode('ascii')}"}})
         accepted += 1
         if accepted >= MAX_VISUAL_FILES:
@@ -730,7 +735,44 @@ async def _default_visual_analyzer(paths: list[Path], *, thinking_enabled: bool 
     return extract_response_text(response.content).strip()
 
 
-def _normalize_visual_analysis(value: Any, *, allowed_asset_names: set[str] | None = None) -> tuple[dict[str, Any], bool]:
+def _apply_ticket_sections(evidence: dict[str, Any], ticket_sections: Mapping[str, str]) -> dict[str, Any]:
+    """Keep explicit Bug-body image roles authoritative over model guesses."""
+    for item in evidence["items"]:
+        sections: set[str] = set()
+        for reference in item["evidence_refs"]:
+            section = ticket_sections.get(reference.get("asset", ""))
+            if section not in {"actual", "expected"}:
+                continue
+            sections.add(section)
+            reference["role"] = "expected_reference" if section == "expected" else "actual_app_screenshot"
+        if len(sections) != 1 or len(item["evidence_refs"]) != 1:
+            continue
+        section = sections.pop()
+        item["asset_role"] = "expected_reference" if section == "expected" else "actual_app_screenshot"
+        target, other = ("expected", "actual") if section == "expected" else ("actual", "expected")
+        for suffix in ("visible_text", "visual"):
+            target_key = f"{target}_{suffix}"
+            other_key = f"{other}_{suffix}"
+            item[target_key] = item[target_key] or item[other_key]
+            item[other_key] = ""
+        item["actual_text"] = item["actual_visible_text"]
+        item["expected_text"] = item["expected_visible_text"]
+        item["visual_difference"] = ""
+        item["mismatch_summary"] = ""
+        if section == "expected":
+            item["observed_clients"] = []
+            item["client"] = "unknown"
+            item["client_evidence"] = ""
+    evidence["comparisons"] = _derive_visual_comparisons(evidence["items"])
+    return evidence
+
+
+def _normalize_visual_analysis(
+    value: Any,
+    *,
+    allowed_asset_names: set[str] | None = None,
+    ticket_sections: Mapping[str, str] | None = None,
+) -> tuple[dict[str, Any], bool]:
     """Return normalized evidence and whether the provider response was valid JSON-like data."""
     parsed = value
     valid = isinstance(parsed, (dict, list))
@@ -741,7 +783,10 @@ def _normalize_visual_analysis(value: Any, *, allowed_asset_names: set[str] | No
         except json.JSONDecodeError:
             parsed = {}
             valid = False
-    return _minimal_visual_evidence(parsed, allowed_asset_names=allowed_asset_names), valid
+    evidence = _minimal_visual_evidence(parsed, allowed_asset_names=allowed_asset_names)
+    if ticket_sections:
+        evidence = _apply_ticket_sections(evidence, ticket_sections)
+    return evidence, valid
 
 
 def _visual_quality_summary(evidence: dict[str, Any]) -> dict[str, Any]:
@@ -807,6 +852,7 @@ async def collect_bug_attachment_evidence(
     total_bytes = 0
     attachment_index: list[dict[str, Any]] = []
     visual_paths: list[Path] = []
+    visual_ticket_sections: dict[str, str] = {}
     visual_asset_indexes: set[int] = set()
 
     for index, asset in enumerate(selected):
@@ -853,6 +899,8 @@ async def collect_bug_attachment_evidence(
                 states[index]["status"] = "indexed"
             elif media_type.startswith("image/"):
                 visual_paths.append(target)
+                if asset.get("ticket_section") in {"actual", "expected"}:
+                    visual_ticket_sections[target.name] = asset["ticket_section"]
                 visual_asset_indexes.add(index)
             elif media_type.startswith("video/"):
                 frames = await _extract_video_frames(target)
@@ -888,12 +936,16 @@ async def collect_bug_attachment_evidence(
             try:
                 if visual_analyzer is None:
                     raw_evidence = await asyncio.wait_for(
-                        _default_visual_analyzer(visual_paths, thinking_enabled=thinking_enabled),
+                        _default_visual_analyzer(visual_paths, ticket_sections=visual_ticket_sections, thinking_enabled=thinking_enabled),
                         timeout=timeout_seconds,
                     )
                 else:
                     raw_evidence = await asyncio.wait_for(visual_analyzer(visual_paths), timeout=timeout_seconds)
-                normalized_evidence, normalized_valid = _normalize_visual_analysis(raw_evidence, allowed_asset_names=allowed_asset_names)
+                normalized_evidence, normalized_valid = _normalize_visual_analysis(
+                    raw_evidence,
+                    allowed_asset_names=allowed_asset_names,
+                    ticket_sections=visual_ticket_sections,
+                )
                 quality_summary = _visual_quality_summary(normalized_evidence)
                 response_sha256 = hashlib.sha256(
                     (raw_evidence if isinstance(raw_evidence, str) else json.dumps(raw_evidence, ensure_ascii=False, sort_keys=True)).encode("utf-8")

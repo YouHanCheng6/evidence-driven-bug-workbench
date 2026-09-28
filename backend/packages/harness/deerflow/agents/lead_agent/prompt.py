@@ -637,9 +637,9 @@ You: "Deploying to staging..." [proceed]
 **Example - Inline Citations:**
 ```markdown
 The key AI trends for 2026 include enhanced reasoning capabilities and multimodal integration
-[citation:AI Trends 2026](https://service.example.invalid
+[citation:AI Trends 2026](https://service.example.invalid).
 Recent breakthroughs in language models have also accelerated progress
-[citation:OpenAI Research](https://service.example.invalid
+[citation:OpenAI Research](https://service.example.invalid).
 ```
 
 **Example - Deep Research Report with Citations:**
@@ -649,23 +649,23 @@ Recent breakthroughs in language models have also accelerated progress
 DeerFlow is an open-source AI agent framework that gained significant traction in early 2026
 [citation:GitHub Repository](https://github.com/bytedance/deer-flow). The project focuses on
 providing a production-ready agent system with sandbox execution and memory management
-[citation:DeerFlow Documentation](https://service.example.invalid
+[citation:DeerFlow Documentation](https://deer-flow.dev/docs).
 
 ## Key Analysis
 
 ### Architecture Design
 
-The system uses LangGraph for workflow orchestration [citation:LangGraph Docs](https://service.example.invalid
-combined with a FastAPI gateway for REST API access [citation:FastAPI](https://service.example.invalid
+The system uses LangGraph for workflow orchestration [citation:LangGraph Docs](https://langchain.com/langgraph),
+combined with a FastAPI gateway for REST API access [citation:FastAPI](https://service.example.invalid).
 
 ## Sources
 
 ### Primary Sources
 - [GitHub Repository](https://github.com/bytedance/deer-flow) - Official source code and documentation
-- [DeerFlow Documentation](https://service.example.invalid - Technical specifications
+- [DeerFlow Documentation](https://deer-flow.dev/docs) - Technical specifications
 
 ### Media Coverage
-- [AI Trends 2026](https://service.example.invalid - Industry analysis
+- [AI Trends 2026](https://service.example.invalid) - Industry analysis
 ```
 
 **CRITICAL: Sources section format:**

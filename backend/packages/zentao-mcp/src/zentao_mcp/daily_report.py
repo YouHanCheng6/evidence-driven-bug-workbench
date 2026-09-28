@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from .client import ZentaoClient, ZentaoError
@@ -13,6 +14,8 @@ _SECTION_END = re.compile(r"\n\s*(?:五[、.]|最终目标|开放边\s*/\s*尚�
 _COOPERATION_LINE = re.compile(r"(?:^|\n)\s*(?:需|需要)配合(?:端)?\s*[：:]\s*([^\n]+)", re.I)
 _NAMED_COOPERATION_LINE = re.compile(r"(?:^|\n)\s*([^\n：:]{1,30}?)(?:需|需要)?配合\s*[：:]", re.I)
 _NO_COOPERATION = re.compile(r"^(?:无|无需|不需要|无其他端|无跨端配合)(?:[。；;，,（(]|$)")
+_PENDING_INPUT_LINE = re.compile(r"(?:^|\n)\s*待确认输入\s*[：:]\s*([^\n]+)", re.I)
+_NO_PENDING_INPUT = re.compile(r"^(?:无|无需|不需要)(?:[。；;，,（(]|$)")
 _ENDPOINT_ALIASES = (
     ("嵌入式", ("嵌入式", "固件", "设备端")),
     ("后端", ("后端", "服务端", "云端")),
@@ -45,7 +48,7 @@ def _product_key(value: Any) -> str:
     return key[2:] if key.startswith("家用") and len(key) > 2 else key
 
 
-def _resolve_product(rows: list[dict[str, Any]], requested: str) -> dict[str, Any]:
+def resolve_product(rows: list[dict[str, Any]], requested: str) -> dict[str, Any]:
     requested_name = requested.strip()
     exact = [row for row in rows if str(row.get("name") or "").strip() == requested_name]
     if len(exact) == 1:
@@ -85,7 +88,7 @@ async def _all_products(client: ZentaoClient) -> list[dict[str, Any]]:
 async def _product_bugs(client: ZentaoClient, product_id: int) -> list[dict[str, Any]]:
     found: dict[int, dict[str, Any]] = {}
     page = 1
-    fields = ["assignedTo.account", "assignedTo.realname", "status"]
+    fields = ["title", "openedDate", "assignedTo.account", "assignedTo.realname", "status"]
     while page <= 200:
         result = await client.read_api(
             f"/products/{product_id}/bugs",
@@ -164,11 +167,20 @@ def _cooperation_endpoints(section: str) -> list[str] | None:
     return endpoints or [values[0][:80]]
 
 
+def _pending_input(section: str) -> str | None:
+    match = _PENDING_INPUT_LINE.search(section)
+    if match is None:
+        return None
+    value = match.group(1).strip()
+    return "" if _NO_PENDING_INPUT.search(value) else value[:240]
+
+
 def _empty_group() -> dict[str, Any]:
     return {
-        "还没有解决": [],
-        "已有修改建议": [],
-        "需要其他端配合": {},
+        "待分析": [],
+        "待确认输入": [],
+        "本地待处理": [],
+        "待其他端配合": {},
     }
 
 
@@ -182,22 +194,25 @@ def _render_report(
     assignees: list[str],
     products: list[str],
     total: int,
+    note_author: str,
 ) -> str:
-    lines = [f"今日未解决 Bug 共 {total} 个。"]
+    lines = [f"今日 ZenTao active（未解决状态）Bug 共 {total} 个。"]
     for owner in assignees:
         lines.extend(("", f"## {owner}"))
         for product in products:
             bucket = grouped[owner][product]
-            unresolved = bucket["还没有解决"]
-            advised = bucket["已有修改建议"]
-            cooperation = bucket["需要其他端配合"]
+            pending_analysis = bucket["待分析"]
+            pending_input = bucket["待确认输入"]
+            local_pending = bucket["本地待处理"]
+            cooperation = bucket["待其他端配合"]
             cooperation_ids = sorted({bug_id for ids in cooperation.values() for bug_id in ids}, reverse=True)
             lines.extend(
                 (
                     f"### {product}",
-                    f"- 还没有解决：{len(unresolved)} 个（{_format_ids(unresolved)}）",
-                    f"- 已有修改建议：{len(advised)} 个（{_format_ids(advised)}）",
-                    f"- 需要其他端配合：{len(cooperation_ids)} 个（{_format_ids(cooperation_ids)}）",
+                    f"- 待分析（无{note_author}备注）：{len(pending_analysis)} 个（{_format_ids(pending_analysis)}）",
+                    f"- 待确认输入：{len(pending_input)} 个（{_format_ids(pending_input)}）",
+                    f"- 本地待处理：{len(local_pending)} 个（{_format_ids(local_pending)}）",
+                    f"- 待其他端配合：{len(cooperation_ids)} 个（{_format_ids(cooperation_ids)}）",
                 )
             )
             for endpoint, ids in cooperation.items():
@@ -213,6 +228,8 @@ async def build_daily_report_snapshot(
     status: str,
     note_author: str,
     detail_concurrency: int = 8,
+    snapshot_sink: Callable[[list[dict[str, Any]]], Awaitable[None]] | None = None,
+    product_rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Return compact report facts without exposing full Bug payloads to the model."""
     if not assignees or not products or not note_author.strip() or not status.strip():
@@ -220,10 +237,10 @@ async def build_daily_report_snapshot(
     if len(assignees) > 20 or len(products) > 20:
         raise ValueError("单次日报最多支持 20 个负责人和 20 个产品")
 
-    product_rows = await _all_products(client)
+    product_rows = product_rows if product_rows is not None else await _all_products(client)
     resolved_products: list[tuple[str, int]] = []
     for requested in products:
-        resolved = _resolve_product(product_rows, requested)
+        resolved = resolve_product(product_rows, requested)
         resolved_products.append((str(resolved["name"]).strip(), int(resolved["id"])))
     resolved_product_ids = [product_id for _, product_id in resolved_products]
     if len(set(resolved_product_ids)) != len(resolved_product_ids):
@@ -239,7 +256,16 @@ async def build_daily_report_snapshot(
             if owner is None:
                 continue
             bug_id = int(item["id"])
-            selected[bug_id] = {"bug_id": bug_id, "owner": owner, "product": product_name}
+            selected[bug_id] = {
+                "bug_id": bug_id,
+                "owner": owner,
+                "product": product_name,
+                "title": str(item.get("title") or "").strip(),
+                "opened_date": str(item.get("openedDate") or "").strip(),
+                "assignee_account": str(item.get("assignedTo.account") or "").strip(),
+                "assignee_realname": str(item.get("assignedTo.realname") or "").strip(),
+                "status": str(item.get("status") or "").strip(),
+            }
 
     semaphore = asyncio.Semaphore(max(1, min(detail_concurrency, 16)))
 
@@ -256,37 +282,51 @@ async def build_daily_report_snapshot(
         return {"ok": False, "message": "部分 Bug 详情读取失败，未生成不完整日报。", "failed": failures[:20]}
 
     grouped: dict[str, dict[str, dict[str, Any]]] = {owner: {product: _empty_group() for product in canonical_products} for owner in assignees}
+    snapshot_rows: list[dict[str, Any]] = []
     for item, result in details:
         assert isinstance(result, dict)
         bucket = grouped[item["owner"]][item["product"]]
         note = _latest_note(result.get("history") or [], note_author)
         if note is None:
-            bucket["还没有解决"].append(item["bug_id"])
+            bucket["待分析"].append(item["bug_id"])
+            snapshot_rows.append({**item, "category": "待分析", "cooperation": [], "pending_input": ""})
             continue
         section, found = _section_four(note)
+        pending_input = _pending_input(section) if found else None
+        if pending_input:
+            bucket["待确认输入"].append(item["bug_id"])
+            snapshot_rows.append({**item, "category": "待确认输入", "cooperation": [], "pending_input": pending_input})
+            continue
         endpoints = _cooperation_endpoints(section if found else note)
         if endpoints:
+            snapshot_rows.append({**item, "category": "待其他端配合", "cooperation": endpoints, "pending_input": ""})
             for endpoint in endpoints:
-                bucket["需要其他端配合"].setdefault(endpoint, []).append(item["bug_id"])
+                bucket["待其他端配合"].setdefault(endpoint, []).append(item["bug_id"])
         else:
             # The report is author-presence based. A Bug with the configured
             # author's note is handled unless that note explicitly asks another
             # endpoint to cooperate. Legacy notes may predate the four-part
             # heading; never send their full prose back into model context.
-            bucket["已有修改建议"].append(item["bug_id"])
+            bucket["本地待处理"].append(item["bug_id"])
+            snapshot_rows.append({**item, "category": "本地待处理", "cooperation": [], "pending_input": ""})
 
     for owner_groups in grouped.values():
         for bucket in owner_groups.values():
-            bucket["还没有解决"].sort(reverse=True)
-            bucket["已有修改建议"].sort(reverse=True)
-            for ids in bucket["需要其他端配合"].values():
+            bucket["待分析"].sort(reverse=True)
+            bucket["待确认输入"].sort(reverse=True)
+            bucket["本地待处理"].sort(reverse=True)
+            for ids in bucket["待其他端配合"].values():
                 ids.sort(reverse=True)
+
+    if snapshot_sink is not None:
+        await snapshot_sink(snapshot_rows)
 
     return {
         "ok": True,
         "total": len(selected),
-        "report": _render_report(grouped, assignees=assignees, products=canonical_products, total=len(selected)),
+        "rows": snapshot_rows,
+        "report": _render_report(grouped, assignees=assignees, products=canonical_products, total=len(selected), note_author=note_author),
     }
 
 
-__all__ = ["build_daily_report_snapshot"]
+__all__ = ["build_daily_report_snapshot", "resolve_product"]

@@ -10,7 +10,7 @@ Set the following variables in the environment that starts DeerFlow. Do not put
 the token in this repository or commit it to Git.
 
 ```bash
-export ZENTAO_URL="https://tickets.example.invalid/zentao"
+export ZENTAO_URL="https://pm.example.invalid/zentao"
 export ZENTAO_TOKEN="replace-with-your-token"
 # Optional: refresh the Token automatically only after a 401/403 response.
 export ZENTAO_ACCOUNT="your-zentao-account"
@@ -75,6 +75,21 @@ snapshot resolves products exactly and defensively canonicalizes one unique opti
 assignees/status, reads matching histories with bounded concurrency, classifies
 explicit cooperation markers, and returns the final compact report text. Note
 bodies and repeated per-Bug tool calls never enter the Agent context.
+
+An operator-owned recurring task can pass `sync_board=true` to project those
+already-classified rows into one Feishu Bitable without another ZenTao read.
+Set `FEISHU_APP_ID`, `FEISHU_APP_SECRET`, `FEISHU_BUG_BOARD_APP_TOKEN`,
+`FEISHU_BUG_BOARD_TABLE_ID`, and optionally `FEISHU_BUG_BOARD_URL` in the
+MCP process environment (use `$NAME` references in `extensions_config.json`,
+with values in the ignored `.env`). Share the dedicated Bitable with the
+intended Feishu group as a viewer. The table contains Bug ID, owner, product,
+category, cooperation endpoints, ZenTao link, current-scope flag and sync time;
+it never contains the original Bug notes. Rows no longer in the report are
+marked `在当前范围=否`, not deleted. The tool returns the original compact report
+plus a board link on success or a visible sync warning on failure. This is an
+optional Feishu write side effect; the ZenTao resources remain read-only.
+Configure the Bitable's default `当前 Bug` view to filter `在当前范围=是`; the
+underlying table retains out-of-scope rows for later inspection.
 
 `api_get` accepts
 only relative `bugs`, `products`, `projects`, and `users` resource paths,

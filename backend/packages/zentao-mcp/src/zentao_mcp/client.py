@@ -94,11 +94,20 @@ class _EditableCommentExtractor(HTMLParser):
 
 
 class _InlineImageExtractor(HTMLParser):
-    """Collect image references without changing the existing plain-text view."""
+    """Collect images together with their explicit position in the Bug body."""
+
+    _section_pattern = re.compile(
+        r"[【\[]\s*(?P<label>预置条件|前置条件|测试步骤|操作步骤|复现步骤|预期结果|期望结果|实际结果|实测结果|测试结果|恢复方法|问题恢复方法|重现概率|复现概率)\s*[】\]]"
+    )
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
         self.images: list[dict[str, str]] = []
+        self._text_chunks: list[str] = []
+        self._section = ""
+
+    def handle_data(self, data: str) -> None:
+        self._text_chunks.append(data)
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag.lower() != "img":
@@ -106,7 +115,11 @@ class _InlineImageExtractor(HTMLParser):
         values = {key.lower(): value for key, value in attrs if value}
         src = values.get("src", "").strip()
         if src and not src.lower().startswith("data:"):
-            self.images.append({"src": src, "alt": values.get("alt", "").strip()})
+            for match in self._section_pattern.finditer("".join(self._text_chunks)):
+                label = match.group("label")
+                self._section = "expected" if label in {"预期结果", "期望结果"} else "actual" if label in {"实际结果", "实测结果", "测试结果"} else ""
+            self._text_chunks.clear()
+            self.images.append({"src": src, "alt": values.get("alt", "").strip(), "ticket_section": self._section})
 
 
 def _plain_text(value: Any) -> str:
@@ -173,16 +186,17 @@ def _inline_image_assets(value: Any) -> list[dict[str, Any]]:
         source_name = Path(urlparse(image["src"]).path).name or f"inline-{index}.png"
         suffix = Path(source_name).suffix or ".png"
         name = f"{image['alt']}{suffix}" if image["alt"] else source_name
-        assets.append(
-            {
-                "id": f"inline-{index}",
-                "name": name,
-                "url": image["src"],
-                "source": "inline_image",
-                "size": None,
-                "media_type": _media_type(name, "image/png"),
-            }
-        )
+        asset = {
+            "id": f"inline-{index}",
+            "name": name,
+            "url": image["src"],
+            "source": "inline_image",
+            "size": None,
+            "media_type": _media_type(name, "image/png"),
+        }
+        if image["ticket_section"]:
+            asset["ticket_section"] = image["ticket_section"]
+        assets.append(asset)
     return assets
 
 

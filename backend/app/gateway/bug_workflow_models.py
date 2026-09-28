@@ -152,6 +152,7 @@ class BugWorkflowResponse(BaseModel):
     analysis_summary: str | None = None
     handoff_state: Literal["analysis_draft", "repair_ready", "analysis_complete"] | None = None
     clarification: dict[str, Any] | None = None
+    # ``product`` remains decodable for historical read-only records only.
     clarification_type: Literal["product", "video", "runtime", "technical"] | None = None
     clarification_stage: Literal["pre_analysis", "post_analysis"] | None = None
     confirmed_copy_scope: dict[str, Any] | None = None

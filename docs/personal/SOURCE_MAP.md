@@ -11,6 +11,7 @@
 | 平台规则 | `bug_runtime_source_policy.py` | 平台/仓库范围与运行时源码策略 |
 | 源码视图 | `bug_source_view.py` | 构建过滤后的当前 checkout 只读视图 |
 | 候选检索 | `bug_source_retrieval.py` | Tabby 查询、候选平衡、精确片段复核和数量上限 |
+| 文件历史 | `bug_git_history_runtime.py` | 已验证入口的单文件、限次数 Git 历史查询 |
 | Codex 会话 | `bug_codex_summary.py` | 启动单个只读会话、组装提示词、校验四段报告 |
 | 修改建议 | `bug_change_advice.py` | 解析并约束第四节建议，不执行修改 |
 | 可选日志 | `bug_log_query_runtime.py` | 准备有边界的日志上下文 |
@@ -19,10 +20,11 @@
 | 批次执行 | `main_agent_bug_batch.py` | 按序运行、持久化和恢复 |
 | 主助手适配 | `main_agent_workbench.py` | 把主助手工具调用接到唯一 Workbench 路径 |
 | 内置工具 | `backend/packages/harness/deerflow/tools/builtins/main_agent_bug_batch_tools.py` | 面向主助手暴露受限的选择/批次能力 |
-| 工单协议 | `backend/app/zentao_mcp/client.py` | 认证页面提交、HTML 转义与读回 |
-| 路由/API | `backend/app/gateway/routers/bug_workflow.py` | HTTP 入口与状态投影 |
+| 工单协议 | `backend/packages/zentao-mcp/src/zentao_mcp/client.py` | 认证页面提交、HTML 转义与读回 |
+| 日报/看板 | `backend/packages/zentao-mcp/src/zentao_mcp/daily_report.py`、`feishu_bug_board.py` | 紧凑日报快照和可选 Bitable 投影 |
+| 路由/API | `backend/app/gateway/routers/bug_workflows.py` | HTTP 入口与状态投影 |
 | 前端页面 | `frontend/src/app/workspace/bugs/page.tsx` | 工作台状态与报告呈现 |
-| 证据组件 | `frontend/src/app/workspace/bugs/source-evidence-panel.tsx` | 候选源码窗口和证据状态展示 |
+| 视频确认 | `frontend/src/components/workspace/bugs/video-clarification-card.tsx` | 唯一有效附件是视频时选择分析或跳过 |
 
 ## 关键调用关系
 
@@ -34,6 +36,7 @@ main_agent_workbench
             ├─ bug_runtime_source_policy
             ├─ bug_log_query_runtime / bug_business_knowledge
             ├─ bug_source_view → bug_source_retrieval
+            ├─ bug_git_history_runtime（可选，单文件一次）
             ├─ bug_codex_summary → bug_change_advice
             └─ zentao_mcp.client
 ```

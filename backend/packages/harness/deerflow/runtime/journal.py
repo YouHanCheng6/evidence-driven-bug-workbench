@@ -307,7 +307,10 @@ class RunJournal(BaseCallbackHandler):
         if is_ai_message and (caller is None or caller == "lead_agent"):
             text = self._message_text(message).strip()
             if text:
-                self._last_ai_msg = text[:2000]
+                # Completion delivery (including scheduled IM reports) uses this
+                # final lead-agent text.  Keep it lossless here; the repository's
+                # in-progress snapshot remains bounded independently.
+                self._last_ai_msg = text
 
     def on_chain_start(
         self,

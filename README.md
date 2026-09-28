@@ -21,9 +21,11 @@
 完整工单 + 附件事实
   → 确认客户端/仓库范围
   → 可选日志与私有业务规则（运行时注入，不进入 Git）
-  → Tabby 小候选集检索
+  → Tabby 原生 BM25 / 向量 / RRF 混合检索
+  → 按产品配置和实现层平衡候选
   → 当前 checkout 逐条精确校验，最多保留 5 个源码窗口
   → 一次全新的只读 Codex 调查会话
+  → 已验证入口若已无故障，允许一次有边界的文件级 Git 历史查询
   → 生成并校验四段式中文报告
   → 只投影第三、四节到工单备注，POST 仅一次
   → 页面优先、历史接口兜底地读回确认
@@ -38,14 +40,16 @@
 | --- | --- | --- |
 | 持久状态机 | 准备、调查、报告、写回和失败状态可恢复 | `backend/app/gateway/bug_workflow_state.py` |
 | 事实与范围准备 | 工单只保留一份规范副本，视觉事实优先，平台范围不靠关键词误判 | `bug_workflow.py`、`bug_investigator.py` |
-| 源码导航 | Tabby 只提供小规模候选，进入上下文前按当前 checkout 精确验证 | `bug_source_retrieval.py`、`bug_source_view.py` |
+| 源码导航 | Tabby 混合检索、产品/实现层平衡，进入上下文前按当前 checkout 精确验证 | `bug_source_retrieval.py`、`bug_source_view.py` |
+| 历史核验 | 只对已证实的当前入口做一次文件级历史查询，区分“当前仍有故障”与“检出版已修复” | `bug_git_history_runtime.py` |
 | 单会话调查 | 一次只读 Codex 会话同时完成源码调查和完整四段报告 | `bug_codex_summary.py` |
 | 修改建议而非执行 | 校验“主要涉及端”和本地修改范围，不自动改代码 | `bug_change_advice.py` |
 | 写回幂等 | 只写第三、四节；HTML 转义、单次提交、页面优先读回 | `bug_workflow.py`、`zentao_mcp/client.py` |
-| 主助手批处理 | 精确保存 Bug 选择，显式启动，按顺序逐条执行并可恢复 | `main_agent_bug_selection.py`、`main_agent_bug_batch.py`、`main_agent_workbench.py` |
-| 前端证据视图 | 展示阶段、候选窗口、报告与历史结果，不在 UI 中重复编排 | `frontend/src/app/workspace/bugs/page.tsx`、`source-evidence-panel.tsx` |
+| 主助手批处理 | 精确保存 Bug 选择，显式启动持久化后台批次，按顺序执行并支持取消/恢复 | `main_agent_bug_selection.py`、`main_agent_bug_batch.py`、`main_agent_workbench.py` |
+| 日报投影 | 定时报告可选将已分类行按 Bug ID 投影到飞书多维表格，失败不影响文本报告 | `daily_report.py`、`feishu_bug_board.py` |
+| 前端证据视图 | 展示阶段、候选窗口、报告与历史结果；只保留“唯一有效视频附件”的分析/跳过确认 | `frontend/src/app/workspace/bugs/page.tsx`、`video-clarification-card.tsx` |
 
-完整文件定位见 [源码指南](docs/personal/SOURCE_MAP.md)。定制快照列在 [PERSONAL_EXPORT_MANIFEST.json](PERSONAL_EXPORT_MANIFEST.json)：当前收录 106 个新增或修改文件，约 5.5 万行。这里统计的是完整文件总量，包含上游原有内容，不能视为个人新增代码量。
+完整文件定位见 [源码指南](docs/personal/SOURCE_MAP.md)。定制快照列在 [PERSONAL_EXPORT_MANIFEST.json](PERSONAL_EXPORT_MANIFEST.json)：当前收录 109 个新增或修改文件，约 5.9 万行。这里统计的是完整文件总量，包含上游原有内容，不能视为个人新增代码量。
 
 ## 上游与个人贡献边界
 

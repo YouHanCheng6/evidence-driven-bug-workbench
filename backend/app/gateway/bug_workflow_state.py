@@ -148,6 +148,7 @@ class BugWorkflowState(TypedDict, total=False):
     platform_model_attempts: list[dict[str, Any]]
     reported_clients: list[str]
     investigation_knowledge_context: dict[str, Any]
+    # Historical read-only fields; new workflows do not create a product pause.
     confirmed_copy_scope: dict[str, Any]
     triage: dict[str, Any]
     triage_model: str

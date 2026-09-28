@@ -93,7 +93,7 @@ def compact_visual_evidence(attachment_evidence: Mapping[str, Any] | None) -> di
         # Preserve the historical no-image prompt exactly; the richer contract
         # is relevant only when at least one visual fact exists.
         return {"items": []}
-    for index, item in enumerate(visual_items[:12], start=1):
+    for index, item in enumerate(visual_items, start=1):
         visual_item_id = _bounded_text(item.get("visual_item_id"), limit=40) or f"visual_{index}"
         compact_item: dict[str, Any] = {
             key: _bounded_text(item.get(key), limit=360)
@@ -185,8 +185,6 @@ def compact_visual_evidence(attachment_evidence: Mapping[str, Any] | None) -> di
                 "basis": _bounded_text(comparison.get("basis"), limit=80),
             }
         )
-        if len(comparisons) >= 8:
-            break
     return {"schema_version": 2, "items": compact_items, "comparisons": comparisons}
 
 
@@ -319,6 +317,7 @@ def _knowledge_query_facts(
     reported_clients: Sequence[str] = (),
     investigation_mode: str = "",
     client_scope_status: str = "",
+    candidate_implementation_layers: Sequence[str] = (),
     confirmed_product_scope: str | None = None,
 ) -> dict[str, Any]:
     items = _visual_items(attachment_evidence)
@@ -355,6 +354,7 @@ def _knowledge_query_facts(
         "observed_clients": observed,
         "investigation_mode": investigation_mode,
         "client_scope_status": client_scope_status,
+        "candidate_implementation_layers": _unique_texts(candidate_implementation_layers, limit=5, item_limit=40),
         "investigation_focus": investigation_focus,
         "product_variants": _unique_texts((bug_snapshot.get("product"), *(item.get("product_variant") or item.get("product") for item in items))),
         "user_paths": _unique_texts((*ticket_navigation["paths"], *(item.get("user_path") for item in items))),
@@ -400,6 +400,7 @@ def build_investigation_knowledge_context(
     reported_clients: Sequence[str] = (),
     investigation_mode: str = "",
     client_scope_status: str = "",
+    candidate_implementation_layers: Sequence[str] = (),
     implementation_lookup_script: Path | None = None,
     confirmed_product_scope: str | None = None,
 ) -> InvestigationKnowledgeContext:
@@ -412,6 +413,7 @@ def build_investigation_knowledge_context(
         reported_clients,
         investigation_mode,
         client_scope_status,
+        candidate_implementation_layers,
         confirmed_product_scope,
     )
     clients = _investigation_clients(facts.get("observed_clients", []), facts.get("reported_clients", []))

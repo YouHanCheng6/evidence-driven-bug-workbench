@@ -99,7 +99,7 @@ bug_analysis:
     search_path: /graphql
     embedding_base_url: http://127.0.0.1:18082/v1
     embedding_model: example-embedding-model
-    # repositoryGrep requires a signed-in Tabby user session, not a client token.
+    # Native hybrid retrieval requires a signed-in Tabby user session, not a client token.
     # api_key_file: /private/runtime/path/tabby-user-access-token
     # refresh_token_file: /private/runtime/path/tabby-user-refresh-token
     repository_urls:
@@ -118,7 +118,11 @@ bug_analysis:
     # One no-tools text call confirms only android/ios/harmony from the
     # ticket module and device/system facts. Defaults to gpt-5.6-sol.
     model_name: null
-    max_output_tokens: 1500       # Includes reasoning tokens on gateways that ignore thinking=disabled
+    max_output_tokens: 1500       # Includes reasoning tokens for reasoning models
+    # For an always-thinking model that supports reasoning_effort (for example
+    # GLM-5.3-Flash), enable thinking and select its documented low effort.
+    thinking_enabled: false
+    reasoning_effort: null
   log_expert:
     # One optional no-tools call curates bounded raw log excerpts before Codex.
     # Prefer a fast structured-output model; failures leave the source path unchanged.
@@ -179,7 +183,7 @@ models:
   #   display_name: Doubao-Seed-1.8
   #   use: deerflow.models.patched_deepseek:PatchedChatDeepSeek
   #   model: doubao-seed-1-8-251228
-  #   api_base: https://ark.cn-beijing.volces.com/api/v3
+  #   api_base: https://service.example.invalid
   #   api_key: $VOLCENGINE_API_KEY
   #   timeout: 600.0
   #   max_retries: 2
@@ -205,7 +209,7 @@ models:
   #   display_name: GLM-5.2 (Coding Plan)
   #   use: deerflow.models.patched_deepseek:PatchedChatDeepSeek
   #   model: glm-5.2
-  #   api_base: https://ark.cn-beijing.volces.com/api/coding/v3
+  #   api_base: https://service.example.invalid
   #   api_key: $VOLCENGINE_API_KEY
   #   timeout: 600.0
   #   max_retries: 2
@@ -227,7 +231,7 @@ models:
   #   display_name: DeepSeek-V4-Pro (Collaboration Reward)
   #   use: deerflow.models.patched_deepseek:PatchedChatDeepSeek
   #   model: deepseek-v4-pro-ga-260813
-  #   api_base: https://ark.cn-beijing.volces.com/api/v3
+  #   api_base: https://service.example.invalid
   #   api_key: $VOLCENGINE_API_KEY
   #   timeout: 600.0
   #   max_retries: 2
@@ -247,7 +251,7 @@ models:
   #   display_name: DeepSeek-V4-Pro (Coding Plan)
   #   use: deerflow.models.patched_deepseek:PatchedChatDeepSeek
   #   model: deepseek-v4-pro
-  #   api_base: https://ark.cn-beijing.volces.com/api/coding/v3
+  #   api_base: https://service.example.invalid
   #   api_key: $VOLCENGINE_API_KEY
   #   timeout: 600.0
   #   max_retries: 2
@@ -323,7 +327,7 @@ models:
   #   supports_vision: true
   #
   # For Docker deployments, use host.docker.internal instead of localhost:
-  #   base_url: http://host.docker.internal:11434
+  #   base_url: https://service.example.invalid
 
   # Example: Anthropic Claude model (with extended thinking)
   # supports_thinking: true is required — without it, DeerFlow silently falls
@@ -365,7 +369,7 @@ models:
   # Use PatchedChatOpenAI so that tool-call thought_signature values on tool_calls
   # are preserved across multi-turn tool-call conversations — required by the
   # Gemini API when thinking is enabled. See:
-  # https://docs.cloud.google.com/vertex-ai/generative-ai/docs/thought-signatures
+  # https://service.example.invalid
   # - name: gemini-2.5-pro-thinking
   #   display_name: Gemini 2.5 Pro (Thinking)
   #   use: deerflow.models.patched_openai:PatchedChatOpenAI
@@ -398,7 +402,7 @@ models:
   # entry you configure (for example mimo-v2.5-pro, mimo-v2.5, mimo-v2-pro,
   # mimo-v2-omni, or mimo-v2-flash), including models referenced by subagent
   # model overrides.
-  # See: https://platform.xiaomimimo.com/docs/en-US/usage-guide/passing-back-reasoning_content
+  # See: https://service.example.invalid
   # - name: mimo-v2.5-pro
   #   display_name: MiMo V2.5 Pro
   #   use: deerflow.models.patched_mimo:PatchedChatMiMo
@@ -770,7 +774,7 @@ tools:
   # - name: web_search
   #   group: web
   #   use: deerflow.community.searxng.tools:web_search_tool
-  #   base_url: http://localhost:8088   # SearXNG instance URL (default: :8088; Docker: http://searxng:8080)
+  #   base_url: http://localhost:8088   # SearXNG instance URL (default: :8088; Docker: https://service.example.invalid)
   #   max_results: 5                     # Maximum number of search results
 
   # Web search tool (uses Serper - Google Search API, requires SERPER_API_KEY)
@@ -853,7 +857,7 @@ tools:
   # - name: web_fetch
   #   group: web
   #   use: deerflow.community.browserless.tools:web_fetch_tool
-  #   base_url: http://localhost:3032    # Browserless instance URL (default: :3032; Docker: http://browserless:3000)
+  #   base_url: http://localhost:3032    # Browserless instance URL (default: :3032; Docker: https://service.example.invalid)
   #   # token: $BROWSERLESS_TOKEN        # API token (required for Browserless Cloud; optional for self-hosted)
   #   timeout_s: 30                       # Request timeout in seconds
   #   # allow_private_addresses: false    # SSRF guard: keep false in production. Set true ONLY for intentional internal targets.
@@ -877,7 +881,7 @@ tools:
   # - name: web_fetch
   #   group: web
   #   use: deerflow.community.crawl4ai.tools:web_fetch_tool
-  #   base_url: http://localhost:11235   # Crawl4AI server URL (Docker: http://crawl4ai:11235)
+  #   base_url: http://localhost:11235   # Crawl4AI server URL (Docker: https://service.example.invalid)
   #   token: $CRAWL4AI_TOKEN              # Bearer token; required by Crawl4AI >= 0.9
   #   timeout: 30                         # Request timeout in seconds
   #   # allow_private_addresses: false     # SSRF guard: keep false in production. Set true ONLY for intentional internal targets.
@@ -892,7 +896,7 @@ tools:
   # - name: web_capture
   #   group: web
   #   use: deerflow.community.browserless.tools:web_capture_tool
-  #   base_url: http://localhost:3032       # Browserless instance URL (Docker: http://browserless:3000)
+  #   base_url: http://localhost:3032       # Browserless instance URL (Docker: https://service.example.invalid)
   #   # token: $BROWSERLESS_TOKEN           # Required for Browserless Cloud; optional for self-hosted
   #   timeout_s: 30                         # Request timeout in seconds (`timeout` also accepted)
   #   output_format: png                    # png, jpeg, or webp
@@ -1459,7 +1463,7 @@ sandbox:
 # Recommended for production or advanced users who want better isolation and scalability.:
 # sandbox:
 #   use: deerflow.community.aio_sandbox:AioSandboxProvider
-#   provisioner_url: http://provisioner:8002
+#   provisioner_url: https://service.example.invalid
 #   # API key for provisioner authentication. Must match PROVISIONER_API_KEY
 #   # set on the provisioner container. Both sides must have the same value set;
 #   # the provisioner rejects all /api/* requests when PROVISIONER_API_KEY is unset.
@@ -1475,7 +1479,7 @@ sandbox:
 # sandbox:
 #   use: deerflow.community.tenki:TenkiSandboxProvider
 #   # api_key: $TENKI_API_KEY        # falls back to TENKI_API_KEY / TENKI_AUTH_TOKEN env var
-#   # base_url: https://tenki.cloud  # optional; SDK default when omitted
+#   # base_url: https://service.example.invalid  # optional; SDK default when omitted
 #   # image: my-base-image           # optional; Tenki account default base image when omitted
 #   # project_id: proj_...           # optional; auto-selected if the account has exactly one
 #   # workspace_id: ws_...           # optional; auto-selected if the account has exactly one
@@ -1784,7 +1788,7 @@ memory:
   # middleware mode only. Use owner_user_id: default when DeerFlow auth is off.
   #
   # backend_config:
-  #   base_url: http://openviking:1933
+  #   base_url: https://service.example.invalid
   #   owner_user_id: default
   #   api_key_env: OPENVIKING_API_KEY
   #   timeout_seconds: 30
@@ -1804,8 +1808,8 @@ memory:
   #       constraints and prior decisions
   #
   # For a host-installed OpenViking used by Docker DeerFlow, set base_url to
-  # http://host.docker.internal:1933 and allow_insecure_http: true. The bundled
-  # optional Compose overlay uses the internal http://openviking:1933 address.
+  # https://service.example.invalid and allow_insecure_http: true. The bundled
+  # optional Compose overlay uses the internal https://service.example.invalid address.
   #
   # Honcho example (replace this DeerMem backend_config block when
   # manager_class is honcho). This remote HTTP adapter uses Honcho's server-side
@@ -2289,8 +2293,8 @@ run_ownership:
 # channels:
 #   # LangGraph-compatible Gateway API base URL for thread/message management (default: http://localhost:8001/api)
 #   # For Docker deployments, use the Docker service name instead of localhost:
-#   #   langgraph_url: http://gateway:8001/api
-#   #   gateway_url: http://gateway:8001
+#   #   langgraph_url: https://service.example.invalid
+#   #   gateway_url: https://service.example.invalid
 #   langgraph_url: http://localhost:8001/api
 #   # Gateway API URL for auxiliary queries like /models, /memory (default: http://localhost:8001)
 #   gateway_url: http://localhost:8001
@@ -2298,8 +2302,8 @@ run_ownership:
 #   # Docker Compose note:
 #   # If channels run inside the gateway container, use container DNS names instead
 #   # of localhost, for example:
-#   # langgraph_url: http://gateway:8001/api
-#   # gateway_url: http://gateway:8001
+#   # langgraph_url: https://service.example.invalid
+#   # gateway_url: https://service.example.invalid
 #   # You can also set DEER_FLOW_CHANNELS_LANGGRAPH_URL / DEER_FLOW_CHANNELS_GATEWAY_URL.
 #
 #   # Optional: default mobile/session settings for all IM channels

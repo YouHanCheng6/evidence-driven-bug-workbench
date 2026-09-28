@@ -1,7 +1,7 @@
 {
   "schema_version": 3,
   "edition": "sanitized personal customization showcase",
-  "export_date": "2026-09-19",
+  "export_date": "2026-09-28",
   "public_base_commit": "88252e9b318d34e7e1867155ad2c77993320788e",
   "source": "author-requested sanitized snapshot of current source files; original Agent workspace remains untouched",
   "runtime_verified": false,
@@ -9,16 +9,16 @@
     {
       "path": ".env.example",
       "source_state": "tracked_worktree",
-      "lines": 119,
-      "redactions": 1,
-      "sha256": "e71bae2f33320690cb9347a8379340e75b0ba62b58af6381002ecf91464e17b8"
+      "lines": 110,
+      "redactions": 2,
+      "sha256": "ff121ff79c904624205525a922520786f9885c6d0fc98c953be74f41bb2415f9"
     },
     {
       "path": "Makefile",
       "source_state": "tracked_worktree",
-      "lines": 190,
+      "lines": 176,
       "redactions": 0,
-      "sha256": "0e31d6b05b59a85d817043cf5132e5652b21b97d58630c22219e969f84b21e8d"
+      "sha256": "c331443fe685b9345b7867fff2cd6462a73c0db8d14a406920f712fc13ea9edd"
     },
     {
       "path": "backend/app/channels/feishu.py",
@@ -30,9 +30,9 @@
     {
       "path": "backend/app/channels/manager.py",
       "source_state": "tracked_worktree",
-      "lines": 3722,
-      "redactions": 25,
-      "sha256": "aea3a1c67f6fac914d021f15555f8831423ca922af39fe8257c73de416e91df7"
+      "lines": 3680,
+      "redactions": 18,
+      "sha256": "0ff7b07edf1ee77023560ca444e57f6468700ece43046e45ac4892f2ff7384be"
     },
     {
       "path": "backend/app/channels/service.py",
@@ -51,9 +51,9 @@
     {
       "path": "backend/app/gateway/bug_attachment_evidence.py",
       "source_state": "tracked_worktree",
-      "lines": 943,
+      "lines": 995,
       "redactions": 0,
-      "sha256": "8a1d1e15d2527f77a510b130274a9d3eb1fbe09e86603305d8dec4fde892460b"
+      "sha256": "6c998150e7f50bd42bd03bcfb322a932ca55d98abbd0e34b25448b80de7661ee"
     },
     {
       "path": "backend/app/gateway/bug_business_knowledge.py",
@@ -72,16 +72,23 @@
     {
       "path": "backend/app/gateway/bug_codex_summary.py",
       "source_state": "untracked",
-      "lines": 322,
+      "lines": 372,
       "redactions": 4,
-      "sha256": "f0aa70f2d83973af858f2c15d7e5ecde4cc5003a0f1a5c11a9bc9b102225a8fb"
+      "sha256": "0abbb2369ad65da28bd884cebe815feec7910a9f9dc659e6b1a9bfea607c26b3"
+    },
+    {
+      "path": "backend/app/gateway/bug_git_history_runtime.py",
+      "source_state": "untracked",
+      "lines": 186,
+      "redactions": 0,
+      "sha256": "5a37d806a14e06fec2a052c799ab8bf18d138c047f773f1c9d62ffd85f757e92"
     },
     {
       "path": "backend/app/gateway/bug_investigator.py",
       "source_state": "tracked_worktree",
-      "lines": 428,
+      "lines": 430,
       "redactions": 2,
-      "sha256": "1c945290fa0c631503fd0f27dc03f5e6fc53e81ab8cf98334ae88f195866b54a"
+      "sha256": "04123f91905d88fa5a5e04491a01afbd38958afd2b58753b3335bc893c46e78c"
     },
     {
       "path": "backend/app/gateway/bug_log_expert.py",
@@ -96,13 +103,6 @@
       "lines": 168,
       "redactions": 0,
       "sha256": "cdc0a2246cac0e39d61acb8bb598a88214c7adfc744af0b225f035c964178af8"
-    },
-    {
-      "path": "backend/app/gateway/bug_phoenix.py",
-      "source_state": "tracked_worktree",
-      "lines": 324,
-      "redactions": 2,
-      "sha256": "50855aef61e2dc9c382e3b53bd66c3bb8ec1cda20c1ae3d6dd9d5f2f90185fc0"
     },
     {
       "path": "backend/app/gateway/bug_rollback.py",
@@ -128,30 +128,30 @@
     {
       "path": "backend/app/gateway/bug_source_retrieval.py",
       "source_state": "untracked",
-      "lines": 1191,
-      "redactions": 7,
-      "sha256": "df87d796355ea9975611228c92286c4969f9e88de0bf3de514326fa682cd0c25"
+      "lines": 1951,
+      "redactions": 15,
+      "sha256": "ccf3a4feffb23f903efce96b3e4517d49a8c5fe88151a152939d5a7fe00e689e"
     },
     {
       "path": "backend/app/gateway/bug_source_view.py",
       "source_state": "tracked_worktree",
-      "lines": 248,
+      "lines": 276,
       "redactions": 0,
-      "sha256": "977e8c7dfd788f1e11ad77e967c6df3c635cf25df3b872ef4cbfab0f662aec0a"
+      "sha256": "915083d9af7300af42b21a74303eb1fa74d38e845ac37288b9418fed69467b46"
     },
     {
       "path": "backend/app/gateway/bug_triage.py",
       "source_state": "tracked_worktree",
-      "lines": 303,
+      "lines": 261,
       "redactions": 0,
-      "sha256": "deb169fc4d4e7b083a0fdcdb9d26b21f3d1ec4a27e995d8e63358bbf5daad870"
+      "sha256": "d93fc0b9d1ce1b05055728a1b7073812c7fbc4410b6909245460e1bdbbc7d88c"
     },
     {
       "path": "backend/app/gateway/bug_workflow.py",
       "source_state": "tracked_worktree",
-      "lines": 2317,
+      "lines": 2097,
       "redactions": 27,
-      "sha256": "91f3a7cfefd106906c364ee163c1cc4b918b4bcdb1b648d54a020265684ed7cc"
+      "sha256": "0c99a36d14c1c20a1ff1c6658154fbfe39f2b8c76832e234b7f2a7e2333242ee"
     },
     {
       "path": "backend/app/gateway/bug_workflow_events.py",
@@ -163,30 +163,30 @@
     {
       "path": "backend/app/gateway/bug_workflow_models.py",
       "source_state": "tracked_worktree",
-      "lines": 194,
+      "lines": 195,
       "redactions": 0,
-      "sha256": "9197f4b946c4b48f23fb592a483d98e413870962e7b22e155a7c34e53befd3e6"
+      "sha256": "60f9278350112692de8f09e6a4b3cc370f9023d664634bc6574a27ed2a204aab"
     },
     {
       "path": "backend/app/gateway/bug_workflow_state.py",
       "source_state": "tracked_worktree",
-      "lines": 241,
+      "lines": 242,
       "redactions": 2,
-      "sha256": "3a2e734b108419dcb7cb0506bb527c99cabfde1e005211e07fa074793f8ed29e"
+      "sha256": "7c70a3deab807a74f906d3203623f6c586e497b8b5f3ff135a8682767ea73eb0"
     },
     {
       "path": "backend/app/gateway/main_agent_bug_batch.py",
       "source_state": "untracked",
-      "lines": 403,
+      "lines": 555,
       "redactions": 0,
-      "sha256": "48e1e70c731eb912eeccd005512a03a9f27a9fb231bf9f3517cdcfb76a4835db"
+      "sha256": "3f3b4e5d87f17a2aca12af032bb0cf1d1c6e819d1bff041c663076ff71fd48a9"
     },
     {
       "path": "backend/app/gateway/main_agent_bug_selection.py",
       "source_state": "untracked",
-      "lines": 196,
-      "redactions": 0,
-      "sha256": "0e98a9987fe8f2a645fe246f33094838a8a05e304d9715c9ecc86b8784b9e8a3"
+      "lines": 437,
+      "redactions": 1,
+      "sha256": "93dee17f4849b35ce74390716ecd0ef9ec29f6b12d6765ec4f83271eab4e2b2c"
     },
     {
       "path": "backend/app/gateway/main_agent_workbench.py",
@@ -205,9 +205,9 @@
     {
       "path": "backend/app/gateway/routers/bug_workflows.py",
       "source_state": "tracked_worktree",
-      "lines": 628,
+      "lines": 584,
       "redactions": 1,
-      "sha256": "8a507b3d3659d69fa9db4790194ca03d06a80f338dc7480095615f214c767678"
+      "sha256": "405155ec2b4ddd7804b000913fe77e7dc3c1fb2fde651041fc6e0b883d3509c6"
     },
     {
       "path": "backend/app/gateway/routers/threads.py",
@@ -233,21 +233,21 @@
     {
       "path": "backend/packages/harness/deerflow/agents/lead_agent/agent.py",
       "source_state": "tracked_worktree",
-      "lines": 997,
+      "lines": 1005,
       "redactions": 1,
-      "sha256": "c6b6ba3a352b1447c3f95aaac9d944582aa76addc626aed9e9fbc3ddb871a17c"
+      "sha256": "49da57e24accb79061cdb58559c6b212e9c02de2b91cafb2c8b80ddbb1ba9ff9"
     },
     {
       "path": "backend/packages/harness/deerflow/agents/lead_agent/prompt.py",
       "source_state": "tracked_worktree",
       "lines": 1102,
-      "redactions": 7,
-      "sha256": "fd04bb6ef7b7cad614fb0575f5570b88cf289e9116219e543d1a95edd2789d70"
+      "redactions": 4,
+      "sha256": "003b8cf7cada979eb16a4c9e9713051e87b6cc60cf5335803f9a9c910c7baee1"
     },
     {
       "path": "backend/packages/harness/deerflow/agents/memory/summarization_hook.py",
       "source_state": "tracked_worktree",
-      "lines": 34,
+      "lines": 29,
       "redactions": 0,
       "sha256": "f5bb52e6d4f4084633d3943449f4f052308b983a6196823a49e263998c9ef058"
     },
@@ -345,9 +345,16 @@
     {
       "path": "backend/packages/harness/deerflow/config/bug_analysis_config.py",
       "source_state": "tracked_worktree",
-      "lines": 107,
+      "lines": 109,
       "redactions": 1,
-      "sha256": "98ca83b201163582295501f430d732bdf270c1b99a5c35886521d94c5eee41cc"
+      "sha256": "b422495dad6f0a5fe9f9a95d24ce4416ca28973650929ba6caef555c2ac21654"
+    },
+    {
+      "path": "backend/packages/harness/deerflow/models/factory.py",
+      "source_state": "tracked_worktree",
+      "lines": 327,
+      "redactions": 0,
+      "sha256": "7b279957b800afc29d6c7012f819de8df966cf5438a47fd0258c8336d0c7ac66"
     },
     {
       "path": "backend/packages/harness/deerflow/persistence/bug_workbench.py",
@@ -357,11 +364,25 @@
       "sha256": "3aebd37b84ec7921d93acee81ad155e530bfdedbe43df56b21d89d650be29d77"
     },
     {
+      "path": "backend/packages/harness/deerflow/persistence/run/sql.py",
+      "source_state": "tracked_worktree",
+      "lines": 776,
+      "redactions": 0,
+      "sha256": "dbc485a2f1ef0dc27385f21c5708d6ac48569c9d429bb4e35e5353958778cb33"
+    },
+    {
       "path": "backend/packages/harness/deerflow/runtime/context_keys.py",
       "source_state": "tracked_worktree",
       "lines": 37,
       "redactions": 0,
       "sha256": "bfe20fe3637fdce9da30a868f6e3ae43238c74b36871ccc35428acb3c22eb3e6"
+    },
+    {
+      "path": "backend/packages/harness/deerflow/runtime/journal.py",
+      "source_state": "tracked_worktree",
+      "lines": 985,
+      "redactions": 0,
+      "sha256": "fa1a24aa80e102fa7c2d74591a8bd7d7a5769dfbbdf1c5810843dd42fe89b574"
     },
     {
       "path": "backend/packages/harness/deerflow/runtime/main_assistant_policy.py",
@@ -415,9 +436,9 @@
     {
       "path": "backend/packages/harness/deerflow/tools/builtins/main_agent_bug_batch_tools.py",
       "source_state": "untracked",
-      "lines": 63,
-      "redactions": 0,
-      "sha256": "f736a4c7ec5a54f3654d23d57337d393eb89f02a04508e01770481713e41d686"
+      "lines": 113,
+      "redactions": 3,
+      "sha256": "dc082d0f899f68ba5eaaccd19d2856aedf320dc58ef4e0c4a80e703706f9eca4"
     },
     {
       "path": "backend/packages/harness/deerflow/tools/builtins/read_bug_workbench_tool.py",
@@ -436,9 +457,9 @@
     {
       "path": "backend/packages/harness/deerflow/utils/oneshot_llm.py",
       "source_state": "tracked_worktree",
-      "lines": 145,
+      "lines": 146,
       "redactions": 0,
-      "sha256": "cb59578b3d3465a9d3f9f1fdc866a6e6e82327cc8ccde071d788d648c5020d42"
+      "sha256": "c0d3ebf811051b5e9ba72cd82e8c265e24d4f606e7aebe6befab66eca81ab478"
     },
     {
       "path": "backend/packages/harness/deerflow/workspace_changes/scanner.py",
@@ -450,9 +471,9 @@
     {
       "path": "backend/packages/zentao-mcp/README.md",
       "source_state": "tracked_worktree",
-      "lines": 94,
+      "lines": 109,
       "redactions": 1,
-      "sha256": "9976af3995c78eae12b56f6a5a980a0f1008c4fe233559cca28b76ac949d835b"
+      "sha256": "9d24fe5fce6f9f2ec87ebc83093a7d4699cfc154a00f447454c2b92952dfd21f"
     },
     {
       "path": "backend/packages/zentao-mcp/pyproject.toml",
@@ -471,51 +492,58 @@
     {
       "path": "backend/packages/zentao-mcp/src/zentao_mcp/client.py",
       "source_state": "tracked_worktree",
-      "lines": 807,
+      "lines": 821,
       "redactions": 0,
-      "sha256": "e76c65c54a4001a415cbc8f95b7c28deb4783325de0a8116c3d2e83e23827bcd"
+      "sha256": "5d89acbcd2cc7db50d22b7c1c38ef46302f1f494fdcc092689af80f1366c00cc"
     },
     {
       "path": "backend/packages/zentao-mcp/src/zentao_mcp/daily_report.py",
       "source_state": "untracked",
-      "lines": 292,
+      "lines": 332,
       "redactions": 0,
-      "sha256": "04cea75fb82c2e21911b3e571ce4757b78877eb52b94d6a454e89c44c5737aae"
+      "sha256": "7347f0d0c49ccee6cba846191e8a48991af3d67ae8cc70bbe2aeb93db1bbf119"
+    },
+    {
+      "path": "backend/packages/zentao-mcp/src/zentao_mcp/feishu_bug_board.py",
+      "source_state": "untracked",
+      "lines": 162,
+      "redactions": 0,
+      "sha256": "7fbf8680c384915cce58c2710e3c7ad694f48777c5582ee3464f6488ef0d1442"
     },
     {
       "path": "backend/packages/zentao-mcp/src/zentao_mcp/server.py",
       "source_state": "tracked_worktree",
-      "lines": 81,
-      "redactions": 0,
-      "sha256": "80043955bf7973c8d1435545ff2e598721c415a2b5be3a43a840c4313d53c09c"
+      "lines": 121,
+      "redactions": 2,
+      "sha256": "ec9b2c6aad2283edffc878ba284066ccc4a37b86b11c148dd970e729ec20664d"
     },
     {
       "path": "backend/pyproject.toml",
       "source_state": "tracked_worktree",
-      "lines": 97,
+      "lines": 95,
       "redactions": 0,
-      "sha256": "ebf4852fa489b027fe0fcd4c8289134ad61d83924f618e569b511f69fdd5fda0"
+      "sha256": "08c659d9eb12fc90e4193d920c0597ad752caef95988ceac2e1eef74c598d5f1"
     },
     {
       "path": "backend/scripts/bug_workflow/configure_tabby_context.py",
       "source_state": "untracked",
-      "lines": 74,
+      "lines": 80,
       "redactions": 3,
-      "sha256": "2e26b18a669f051b344870461bece68105f3d3818b746fe1911cb32cde40c6ba"
+      "sha256": "5dd4e8f771deacaf6ad272fbe1e2866eca5fe17d00c34335eb32d3a0b26adc62"
     },
     {
       "path": "backend/scripts/bug_workflow/evaluate_tabby_retrieval.py",
       "source_state": "untracked",
-      "lines": 199,
+      "lines": 207,
       "redactions": 16,
-      "sha256": "c9e99b3343bfcbc7e6b604c53dfde60443f95321c99b91b10f9f2b67d7932f7f"
+      "sha256": "52a2eb9b01b1d20dbfec014fcd7c11f0d3addd347e9973e0bd15341362226f3e"
     },
     {
       "path": "backend/scripts/bug_workflow/prepare_tabby_repositories.py",
       "source_state": "untracked",
       "lines": 148,
       "redactions": 12,
-      "sha256": "6791256d6668c2394cf67039c906723541e74936ce6cc8a56582ef396146544f"
+      "sha256": "f82a1d43db0dd37c4660e7601dc5accd4f93070fc73ad4d2debb4a6d4d268555"
     },
     {
       "path": "backend/scripts/bug_workflow/run_tabby_context.py",
@@ -534,37 +562,30 @@
     {
       "path": "backend/scripts/bug_workflow/tabby_noop_completion.py",
       "source_state": "untracked",
-      "lines": 56,
+      "lines": 110,
       "redactions": 0,
-      "sha256": "93efd3d09444984a5f85e79c11ed41ff56d6da3d5ed8c7c4b969892b61513acb"
+      "sha256": "c82a499f3d14565e01fac78d06a48f07a95256b0bb21a522bd7b8ae87aace39c"
     },
     {
       "path": "backend/uv.lock",
       "source_state": "tracked_worktree",
-      "lines": 5502,
+      "lines": 5498,
       "redactions": 0,
-      "sha256": "b56927fe1822e649c923d7c343901e07cd2c4df16c692b3f1c437a7b928152c7"
+      "sha256": "d2f166c2855f19f50f73e8e05f353065c8eafe8338a2d500432457c9645e8189"
     },
     {
       "path": "config.example.yaml",
       "source_state": "tracked_worktree",
-      "lines": 2645,
-      "redactions": 13,
-      "sha256": "acf761bb1d8d16a352d887d822e9530c20fa14699a941135e866fc46897c0c9d"
-    },
-    {
-      "path": "docker/docker-compose.phoenix.yml",
-      "source_state": "tracked_worktree",
-      "lines": 34,
-      "redactions": 0,
-      "sha256": "5079e3120710b0af43c7862c889cdef54abe3ac9ab4ef1749f4853556fcadf17"
+      "lines": 2649,
+      "redactions": 33,
+      "sha256": "829804ae0571c54aabb8929036f6fd1fc7675632d8cdda024ea90a8b25e4db45"
     },
     {
       "path": "extensions_config.example.json",
       "source_state": "tracked_worktree",
-      "lines": 91,
+      "lines": 96,
       "redactions": 0,
-      "sha256": "8caa110885d782cf9b31fd6cb48a2ff18c2dbe5ba191fe821b4969b805cbea93"
+      "sha256": "bd418f0a523204fbba04ba04647a55a6447d7d57784c8941283dca77cb24a276"
     },
     {
       "path": "frontend/pnpm-workspace.yaml",
@@ -583,16 +604,16 @@
     {
       "path": "frontend/src/app/layout.tsx",
       "source_state": "tracked_worktree",
-      "lines": 29,
+      "lines": 34,
       "redactions": 4,
       "sha256": "80be027a1805735428b190cf2832e3dff2e0731b8b8f354380960fc01accf9ed"
     },
     {
       "path": "frontend/src/app/workspace/bugs/page.tsx",
       "source_state": "tracked_worktree",
-      "lines": 1184,
+      "lines": 1182,
       "redactions": 8,
-      "sha256": "d800b0b88e0a0980b7f38b0d24dcf728f824462429c636d37ee7240947619133"
+      "sha256": "36e3569209b17f780b120d069f8911a212007a9c6b724ee2c4a21306698249d9"
     },
     {
       "path": "frontend/src/app/workspace/chats/page.tsx",
@@ -609,18 +630,18 @@
       "sha256": "de139fbf64f7ccc8db4776d6bb0244b9f129365dedc42d7d0d2d63d7ea9b795b"
     },
     {
-      "path": "frontend/src/components/workspace/bugs/product-clarification-card.tsx",
-      "source_state": "tracked_worktree",
-      "lines": 216,
-      "redactions": 1,
-      "sha256": "a5753dc65b716bd8af21884c8c6daf833c15d582fa46d7d77a3762252f047b20"
-    },
-    {
       "path": "frontend/src/components/workspace/bugs/source-evidence-panel.tsx",
       "source_state": "untracked",
       "lines": 258,
       "redactions": 0,
       "sha256": "7d52a29826b70d13ec858fa65009c4fbbeefadff319ccd72a8037c1d3a4fde8e"
+    },
+    {
+      "path": "frontend/src/components/workspace/bugs/video-clarification-card.tsx",
+      "source_state": "untracked",
+      "lines": 62,
+      "redactions": 0,
+      "sha256": "8d6bc9ca560ebfb2be400904ac9165494046e8c81e07789bd40b938f14e59602"
     },
     {
       "path": "frontend/src/components/workspace/messages/message-group.tsx",
@@ -633,8 +654,8 @@
       "path": "frontend/src/components/workspace/recent-chat-list.tsx",
       "source_state": "tracked_worktree",
       "lines": 564,
-      "redactions": 0,
-      "sha256": "432bd110babe6f3f5bfa65026cac9d782e1bae100eae970870484c1a3791fc15"
+      "redactions": 1,
+      "sha256": "e938917fd05cf232d55bc4d14e98a1ee12cabd412f8d9d140da4d5c8b120389c"
     },
     {
       "path": "frontend/src/components/workspace/workspace-container.tsx",
@@ -667,16 +688,16 @@
     {
       "path": "frontend/src/core/bugs/api.ts",
       "source_state": "tracked_worktree",
-      "lines": 511,
+      "lines": 504,
       "redactions": 2,
-      "sha256": "a18e9130129226054da0e1afe13a77083a3601614bc1e7a0b8cfea15a4cdcb26"
+      "sha256": "0c059d2afabbfe6afcdbbf2659736849b516196723abfc49bda671d3d18c5f18"
     },
     {
       "path": "frontend/src/core/bugs/workbench.ts",
       "source_state": "tracked_worktree",
-      "lines": 169,
+      "lines": 168,
       "redactions": 2,
-      "sha256": "f6235399e44d75f5f999789a8a7a2ec5b2ae341b72ceea2f6c1bca0e39fd90b4"
+      "sha256": "a27142bd2a91759d1f1481a64871bde5a2043426ba21c243438a174cabd97a3e"
     },
     {
       "path": "frontend/src/core/feishu-conversations/api.ts",

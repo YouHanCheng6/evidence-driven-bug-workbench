@@ -63,6 +63,15 @@ def _historical_cases(database: Path, *, limit: int, bug_ids: set[int] | None = 
             if not repository or not reference_paths:
                 continue
             knowledge = workflow.get("investigation_knowledge_context") or {}
+            business = knowledge.get("business_knowledge") or {}
+            retrieval_aliases: list[str] = []
+            for rule in business.get("rules", []) if isinstance(business.get("rules"), list) else []:
+                if not isinstance(rule, dict) or rule.get("applicability") != "matched":
+                    continue
+                for alias in rule.get("retrieval_aliases", []) if isinstance(rule.get("retrieval_aliases"), list) else []:
+                    text = str(alias).strip()
+                    if text and text not in retrieval_aliases:
+                        retrieval_aliases.append(text)
             runtime = {
                 "log_evidence": workflow.get("runtime_log_evidence") or {},
                 "runtime_pre_scan": workflow.get("runtime_pre_scan") or {},
@@ -74,6 +83,7 @@ def _historical_cases(database: Path, *, limit: int, bug_ids: set[int] | None = 
                     "bug_snapshot": workflow["bug_snapshot"],
                     "query_facts": knowledge.get("query_facts") or {},
                     "runtime_evidence": runtime,
+                    "retrieval_aliases": retrieval_aliases,
                     "reference_paths": reference_paths,
                 }
             )
@@ -101,8 +111,8 @@ async def main_async() -> int:
         help="Evaluate only this persisted Bug id; repeat for multiple ids.",
     )
     parser.add_argument("--output", type=Path, default=Path(".deer-flow/audits/tabby-historical-retrieval.json"))
-    parser.add_argument("--sample_mobile_repo", type=Path, default=Path("/home/example_user/projects/sample_mobile_repo"))
-    parser.add_argument("--harmony-rn", type=Path, default=Path("/home/example_user/sample_platform_repo"))
+    parser.add_argument("--sample_mobile_repo", type=Path, default=Path("/home/example_user Workbench/projects/sample_mobile_repo"))
+    parser.add_argument("--harmony-rn", type=Path, default=Path("/home/example_user Workbench/sample_platform_repo"))
     parser.add_argument("--index-root", type=Path, default=Path(".deer-flow/tabby/composite-repositories"))
     args = parser.parse_args()
 
@@ -139,9 +149,7 @@ async def main_async() -> int:
         bug_ids=selected_bug_ids or None,
     )
     for case in raw_cases:
-        case["reference_paths"] = [
-            path for path in case["reference_paths"] if (roots[case["repository"]] / path).is_file()
-        ]
+        case["reference_paths"] = [path for path in case["reference_paths"] if (roots[case["repository"]] / path).is_file()]
         if not case["reference_paths"]:
             continue
         packet = await asyncio.to_thread(
@@ -152,19 +160,19 @@ async def main_async() -> int:
             query_facts=case["query_facts"],
             runtime_evidence=case["runtime_evidence"],
             config=config,
+            retrieval_aliases=case["retrieval_aliases"],
         )
         candidate_paths = [entry["path"] for entry in packet.get("entries", [])]
-        candidate_scores = [
-            {"path": entry["path"], "score": entry.get("score"), "anchor": entry.get("symbol")}
-            for entry in packet.get("entries", [])
-        ]
+        candidate_scores = [{"path": entry["path"], "score": entry.get("score"), "anchor": entry.get("symbol")} for entry in packet.get("entries", [])]
         overlap = sorted(set(candidate_paths) & set(case["reference_paths"]))
         results.append(
             {
                 "bug_id": case["bug_id"],
                 "repository": case["repository"],
                 "status": packet.get("status"),
+                "reason": packet.get("reason"),
                 "query": packet.get("query"),
+                "architecture_resolution": packet.get("architecture_resolution"),
                 "candidate_paths": candidate_paths,
                 "candidate_scores": candidate_scores,
                 "historical_report_paths": case["reference_paths"],

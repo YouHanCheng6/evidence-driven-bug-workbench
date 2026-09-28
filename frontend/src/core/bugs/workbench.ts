@@ -49,7 +49,6 @@ export function getBugWorkflowStatusLabel(
     case "awaiting_evidence":
       return "旧任务只读";
     case "awaiting_clarification":
-      if (clarificationType === "product") return "等待确认产品目标";
       if (clarificationType === "video") return "等待确认是否分析视频";
       return "旧任务只读";
     case "writing_note":

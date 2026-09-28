@@ -19,15 +19,15 @@ class BugSourceRetrievalConfig(BaseModel):
     api_key_file: str | None = Field(default=None, description="Optional private file containing the Tabby bearer token.")
     refresh_token_file: str | None = Field(
         default=None,
-        description="Optional private Tabby user refresh token; required for authenticated repositoryGrep sessions.",
+        description="Optional private Tabby user refresh token; required for authenticated hybrid-retrieval sessions.",
     )
     search_path: str = Field(
         default="/graphql",
-        description="Tabby GraphQL endpoint used for bounded repository grep; no completion model is involved.",
+        description="Tabby GraphQL endpoint used for repository discovery and exact-literal fallback.",
     )
     embedding_base_url: str = Field(
         default="http://127.0.0.1:18082/v1",
-        description="OpenAI-compatible embedding endpoint used only to rerank bounded Tabby grep candidates.",
+        description="OpenAI-compatible embedding endpoint used only when Tabby's internal hybrid retrieval is unavailable.",
     )
     embedding_model: str = "example-embedding-model"
     embedding_api_key: str | None = Field(default=None, description="Optional embedding bearer token; loopback adapter needs none.")
@@ -81,6 +81,8 @@ class BugPlatformResolutionConfig(BaseModel):
         description="Optional model override for ticket-only platform confirmation; defaults to gpt-5.6-sol.",
     )
     max_output_tokens: int = Field(default=1_500, ge=200, le=4_000)
+    thinking_enabled: bool = False
+    reasoning_effort: Literal["low", "high", "max"] | None = None
 
 
 class BugLogExpertConfig(BaseModel):

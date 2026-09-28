@@ -98,13 +98,21 @@ def _custom_agent_extra_tools(
         tools.append(bug_workbench_tool)
         from deerflow.tools.builtins.start_bug_workbench_tool import start_bug_workbench_tool
         from deerflow.tools.builtins.main_agent_bug_batch_tools import (
+            cancel_bug_workbench_batch_tool,
             query_zentao_bug_selection_tool,
             read_bug_workbench_batch_tool,
             start_selected_bug_workbench_batch_tool,
         )
 
         tools.append(start_bug_workbench_tool)
-        tools.extend((query_zentao_bug_selection_tool, start_selected_bug_workbench_batch_tool, read_bug_workbench_batch_tool))
+        tools.extend(
+            (
+                query_zentao_bug_selection_tool,
+                start_selected_bug_workbench_batch_tool,
+                read_bug_workbench_batch_tool,
+                cancel_bug_workbench_batch_tool,
+            )
+        )
     if skill_management_enabled:
         from deerflow.tools.skill_manage_tool import skill_manage_tool
 

@@ -93,40 +93,6 @@ class BugInvestigationFocus:
 
 
 @dataclass(frozen=True, slots=True)
-class BugProductOption:
-    """One mutually exclusive product result, not a technical implementation."""
-
-    option_id: str
-    label: str
-    target_behavior: str
-
-    def payload(self) -> dict[str, str]:
-        return {
-            "id": self.option_id,
-            "label": self.label,
-            "value": self.target_behavior,
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class BugProductDecision:
-    """A real product fork whose choice changes behavior or modification scope."""
-
-    question: str
-    reason: str
-    impact: str
-    options: tuple[BugProductOption, ...]
-
-    def payload(self) -> dict[str, Any]:
-        return {
-            "question": self.question,
-            "reason": self.reason,
-            "impact": self.impact,
-            "options": [option.payload() for option in self.options],
-        }
-
-
-@dataclass(frozen=True, slots=True)
 class BugTriageResult:
     """A bounded symptom classification, not a source-ownership conclusion."""
 
@@ -141,11 +107,6 @@ class BugTriageResult:
     # Historical workflows serialized this field.  New workflows always leave
     # it empty and derive final targets after evidence collection.
     investigation_targets: tuple[BugInvestigationTarget, ...] = ()
-    product_decision: BugProductDecision | None = None
-
-    @property
-    def needs_product_confirmation(self) -> bool:
-        return self.product_decision is not None
 
     @property
     def display_name(self) -> str:
@@ -171,8 +132,6 @@ class BugTriageResult:
             "direction": self.direction,
             "evidence_need": self.evidence_need,
             "investigation_focus": self.investigation_focus.payload() if self.investigation_focus is not None else None,
-            "product_decision": self.product_decision.payload() if self.product_decision is not None else None,
-            "needs_product_confirmation": self.needs_product_confirmation,
             "display_name": self.display_name,
         }
 
@@ -280,7 +239,6 @@ def apply_visual_copy_evidence(
                 "ui_subtype": "copy",
                 "display_name": "UI 文案问题",
                 "investigation_focus": focus,
-                "needs_product_confirmation": isinstance(result.get("product_decision"), Mapping),
             }
         )
     return result

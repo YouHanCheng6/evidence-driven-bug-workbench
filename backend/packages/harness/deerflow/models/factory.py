@@ -236,6 +236,13 @@ def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *
     # value exactly as it would a profile-native one.
     if model_overrides:
         model_settings_from_config.update({key: value for key, value in model_overrides.items() if value is not None})
+    # reasoning_effort may also arrive as a runtime kwarg (for example from an
+    # agent's saved settings). Keep one copy in the profile settings so the two
+    # dictionaries cannot pass the same constructor keyword twice. Apply it
+    # before the thinking-mode transforms; disabling thinking may override it.
+    runtime_reasoning_effort = kwargs.pop("reasoning_effort", None)
+    if model_config.supports_reasoning_effort and runtime_reasoning_effort is not None:
+        model_settings_from_config["reasoning_effort"] = runtime_reasoning_effort
     # Compute effective when_thinking_enabled by merging in the `thinking` shortcut field.
     # The `thinking` shortcut is equivalent to setting when_thinking_enabled["thinking"].
     has_thinking_settings = (model_config.when_thinking_enabled is not None) or (model_config.thinking is not None)
@@ -269,7 +276,6 @@ def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *
             # Native langchain_anthropic: thinking is a direct constructor parameter
             model_settings_from_config["thinking"] = {"type": "disabled"}
     if not model_config.supports_reasoning_effort:
-        kwargs.pop("reasoning_effort", None)
         model_settings_from_config.pop("reasoning_effort", None)
 
     # Normalize the api_base -> base_url alias FIRST, so the downstream OpenAI-compatible
@@ -285,7 +291,7 @@ def create_chat_model(name: str | None = None, thinking_enabled: bool = False, *
         model_settings_from_config.pop("max_tokens", None)
 
         # Use explicit reasoning_effort from frontend if provided (low/medium/high)
-        explicit_effort = kwargs.pop("reasoning_effort", None)
+        explicit_effort = runtime_reasoning_effort if model_config.supports_reasoning_effort else None
         if not thinking_enabled:
             model_settings_from_config["reasoning_effort"] = "none"
         elif explicit_effort and explicit_effort in ("low", "medium", "high", "xhigh"):

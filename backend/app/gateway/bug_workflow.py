@@ -30,7 +30,6 @@ from app.gateway.bug_investigator import (
 )
 from app.gateway.bug_log_expert import collect_log_material, run_log_expert
 from app.gateway.bug_log_query_runtime import LOG_CACHE_DIRECTORY
-from app.gateway.bug_phoenix import BugPhoenixTrace
 from app.gateway.bug_source_retrieval import build_source_retrieval
 from app.gateway.bug_source_view import materialize_bug_source_view
 from app.gateway.bug_triage import apply_visual_copy_evidence, select_relevant_assets, unknown_triage
@@ -72,6 +71,9 @@ _BUG_SNAPSHOT_FIELDS = (
     "closed_at",
     "severity",
 )
+_KNOWN_DEVICE_PLATFORMS: dict[str, Literal["android", "ios", "harmony"]] = {
+    "EXAMPLE-DEVICE": "android",
+}
 
 
 @dataclass(frozen=True)
@@ -352,6 +354,8 @@ async def _run_platform_resolution(
     model_name: str | None,
     max_output_tokens: int,
     thread_id: str,
+    thinking_enabled: bool = False,
+    reasoning_effort: str | None = None,
 ) -> PlatformResolution:
     """Confirm reproduced clients once; repository and owner policy stay deterministic."""
     choices, _choice_text = _platform_fact_choices(snapshot)
@@ -381,7 +385,7 @@ async def _run_platform_resolution(
             primary_repository="sample_platform_repo" if repository_family == "harmony" else "sample_mobile_repo",
             investigation_mode=fallback_mode,
             client_scope_status="module_fallback",
-            candidate_implementation_layers=("sample_platform_repo",) if repository_family == "harmony" else ("shared_rn",),
+            candidate_implementation_layers=("harmony_native", "sample_platform_repo") if repository_family == "harmony" else ("android_native", "ios_native", "shared_rn"),
             client_evidence={},
             evidence=tuple(dict(choices[evidence_id]) for evidence_id in repository_ids),
             reason="工单未提供可确认具体复现端的设备或系统事实，已按 module 降级确定仓库家族；具体客户端保持未知。",
@@ -420,45 +424,66 @@ async def _run_platform_resolution(
 
     model_attempts: list[dict[str, Any]] = []
     token_usage = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-    for attempt_index in range(2):
-        output_budget = max_output_tokens if attempt_index == 0 else min(max_output_tokens * 2, 4_000)
-        response = await run_oneshot_llm_result(
-            system_instruction="你是一次性的客户端复现端确认器，只把明确工单事实归一化为 android、ios、harmony。",
-            user_content=prompt,
-            run_name="bug-platform-resolution",
-            app_config=get_app_config(),
-            model_name=model_name,
-            thread_id=thread_id,
-            max_tokens=output_budget,
-        )
-        for key in token_usage:
-            token_usage[key] += int(response.usage_metadata.get(key) or 0)
-        provider_usage = response.response_metadata.get("token_usage")
-        completion_details = provider_usage.get("completion_tokens_details") if isinstance(provider_usage, Mapping) else None
-        reasoning_tokens = completion_details.get("reasoning_tokens") if isinstance(completion_details, Mapping) else None
-        attempt_record: dict[str, Any] = {
-            "attempt": attempt_index + 1,
-            "output_budget": output_budget,
-            "finish_reason": str(response.response_metadata.get("finish_reason") or "unknown")[:40],
-            "text_chars": len(response.text),
-            "output_tokens": int(response.usage_metadata.get("output_tokens") or 0),
-            "reasoning_tokens": reasoning_tokens if isinstance(reasoning_tokens, int) and reasoning_tokens >= 0 else None,
+    raw_response = ""
+    known_match = next(
+        (
+            (model, platform, evidence_id)
+            for model, platform in _KNOWN_DEVICE_PLATFORMS.items()
+            for evidence_id, item in client_choices.items()
+            if re.search(r"(?<![A-Za-z0-9])" + re.escape(model) + r"(?![A-Za-z0-9])", item["quote"], re.IGNORECASE)
+        ),
+        None,
+    )
+    if known_match is not None:
+        model, platform, evidence_id = known_match
+        payload: dict[str, Any] = {
+            "reported_clients": [platform],
+            "client_evidence_ids": {platform: [evidence_id]},
+            "reason": f"已知设备型号 {model} 明确为 {platform}。",
         }
-        try:
-            payload = _json_object_from_model_text(response.text)
-        except ValueError as exc:
-            attempt_record["outcome"] = "invalid_json"
-            parse_error = exc.__cause__
-            if isinstance(parse_error, json.JSONDecodeError):
-                attempt_record["json_error"] = parse_error.msg[:100]
-                attempt_record["json_error_position"] = parse_error.pos
+    else:
+        for attempt_index in range(2):
+            output_budget = max_output_tokens if attempt_index == 0 else min(max_output_tokens * 2, 4_000)
+            response = await run_oneshot_llm_result(
+                system_instruction="你是一次性的客户端复现端确认器，只把明确工单事实归一化为 android、ios、harmony。",
+                user_content=prompt,
+                run_name="bug-platform-resolution",
+                app_config=get_app_config(),
+                model_name=model_name,
+                thread_id=thread_id,
+                max_tokens=output_budget,
+                thinking_enabled=thinking_enabled,
+                reasoning_effort=reasoning_effort,
+            )
+            raw_response = response.text
+            for key in token_usage:
+                token_usage[key] += int(response.usage_metadata.get(key) or 0)
+            provider_usage = response.response_metadata.get("token_usage")
+            completion_details = provider_usage.get("completion_tokens_details") if isinstance(provider_usage, Mapping) else None
+            reasoning_tokens = completion_details.get("reasoning_tokens") if isinstance(completion_details, Mapping) else None
+            attempt_record: dict[str, Any] = {
+                "attempt": attempt_index + 1,
+                "output_budget": output_budget,
+                "finish_reason": str(response.response_metadata.get("finish_reason") or "unknown")[:40],
+                "text_chars": len(response.text),
+                "output_tokens": int(response.usage_metadata.get("output_tokens") or 0),
+                "reasoning_tokens": reasoning_tokens if isinstance(reasoning_tokens, int) and reasoning_tokens >= 0 else None,
+            }
+            try:
+                payload = _json_object_from_model_text(response.text)
+            except ValueError as exc:
+                attempt_record["outcome"] = "invalid_json"
+                parse_error = exc.__cause__
+                if isinstance(parse_error, json.JSONDecodeError):
+                    attempt_record["json_error"] = parse_error.msg[:100]
+                    attempt_record["json_error_position"] = parse_error.pos
+                model_attempts.append(attempt_record)
+                if attempt_index == 1:
+                    raise PlatformResolutionFormatError(model_attempts, token_usage) from exc
+                continue
+            attempt_record["outcome"] = "valid_json"
             model_attempts.append(attempt_record)
-            if attempt_index == 1:
-                raise PlatformResolutionFormatError(model_attempts, token_usage) from exc
-            continue
-        attempt_record["outcome"] = "valid_json"
-        model_attempts.append(attempt_record)
-        break
+            break
     raw_clients = payload.get("reported_clients")
     if not isinstance(raw_clients, list):
         raise ValueError("端确认模型没有返回 reported_clients")
@@ -470,7 +495,7 @@ async def _run_platform_resolution(
         if raw_client_evidence not in (None, {}) and (not isinstance(raw_client_evidence, Mapping) or bool(raw_client_evidence)):
             raise ValueError("端确认模型返回空客户端时仍携带客户端证据")
         return module_fallback(
-            raw_response=response.text,
+            raw_response=raw_response,
             token_usage=token_usage,
             model_call_count=len(model_attempts),
             model_attempts=model_attempts,
@@ -512,10 +537,10 @@ async def _run_platform_resolution(
     else:
         mode = "harmony"
     candidate_layers = {
-        "android": ("shared_rn", "android_native"),
-        "ios": ("shared_rn", "ios_native"),
-        "android_ios_shared": ("shared_rn",),
-        "harmony": ("sample_platform_repo", "harmony_native"),
+        "android": ("android_native", "shared_rn"),
+        "ios": ("ios_native", "shared_rn"),
+        "android_ios_shared": ("android_native", "ios_native", "shared_rn"),
+        "harmony": ("harmony_native", "sample_platform_repo"),
     }[mode]
     reason = re.sub(r"\s+", " ", str(payload.get("reason") or "")).strip()[:500]
     return PlatformResolution(
@@ -528,7 +553,7 @@ async def _run_platform_resolution(
         client_evidence=client_evidence,
         evidence=evidence,
         reason=reason,
-        raw_response=response.text[:4_000],
+        raw_response=raw_response[:4_000],
         token_usage=token_usage,
         model_call_count=len(model_attempts),
         model_attempts=tuple(model_attempts),
@@ -644,65 +669,6 @@ def _zentao_note_quality_error(note: str, _source_evidence: Sequence[str]) -> st
     if re.search(r"(?m)^\s*(?:一、分析结论|二、责任端与责任层)\s*$", note):
         return "note_contains_unrequested_sections"
     return None
-
-
-def _build_preanalysis_product_clarification(triage: Mapping[str, Any]) -> dict[str, Any]:
-    """Expose only a complete mutually exclusive product decision."""
-    decision = triage.get("product_decision")
-    if not isinstance(decision, Mapping):
-        raise RuntimeError("产品分叉合同缺失")
-    raw_options = decision.get("options")
-    options = [dict(option) for option in raw_options if isinstance(option, Mapping)] if isinstance(raw_options, list) else []
-    if not 2 <= len(options) <= 4:
-        raise RuntimeError("产品分叉选项无效")
-    return {
-        "question": str(decision.get("question") or "请确认本次应实现的产品结果。"),
-        "response_mode": "choice",
-        "options": options,
-        "allow_free_text": False,
-        "allow_skip": False,
-        "decision_reason": str(decision.get("reason") or ""),
-        "decision_impact": str(decision.get("impact") or ""),
-    }
-
-
-def _scoped_copy_attachment_evidence(
-    attachment_evidence: Mapping[str, Any] | None,
-    confirmed_scope: str,
-) -> dict[str, Any] | None:
-    """Keep only explicitly numbered copy items for downstream source work."""
-    if not isinstance(attachment_evidence, Mapping):
-        return None
-    visual = attachment_evidence.get("visual_evidence")
-    items = visual.get("items") if isinstance(visual, Mapping) else None
-    if not isinstance(items, list):
-        return dict(attachment_evidence)
-    modify_match = re.search(
-        r"(?:修改|要改|只改)\s*[:：]?\s*(.+?)(?=(?:[；;]\s*)?(?:不改|排除|跨端|基准)\s*[:：]?|$)",
-        confirmed_scope,
-        re.IGNORECASE,
-    )
-    if modify_match is None:
-        return dict(attachment_evidence)
-    number_words = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
-    selected_indexes = {int(value) for value in re.findall(r"(?<!\d)(\d{1,2})(?!\d)", modify_match.group(1))}
-    selected_indexes.update(number_words[value] for value in re.findall(r"第?([一二三四五六七八九十])(?:项|处|条)?", modify_match.group(1)) if value in number_words)
-    if not selected_indexes:
-        return dict(attachment_evidence)
-    copy_items = [item for item in items if isinstance(item, Mapping) and (str(item.get("actual_visible_text") or item.get("actual_text") or "").strip() or str(item.get("expected_visible_text") or item.get("expected_text") or "").strip())]
-    selected = [{**dict(item), "copy_item_id": f"copy_{index}"} for index, item in enumerate(copy_items, start=1) if index in selected_indexes]
-    if not selected:
-        return dict(attachment_evidence)
-    selected_ids = {str(item.get("visual_item_id") or "") for item in selected}
-    comparisons = [
-        dict(comparison)
-        for comparison in visual.get("comparisons", [])
-        if isinstance(comparison, Mapping) and all(str(value) in selected_ids for value in comparison.get("actual_item_ids", [])) and all(str(value) in selected_ids for value in comparison.get("expected_item_ids", []))
-    ]
-    return {
-        **dict(attachment_evidence),
-        "visual_evidence": {**dict(visual), "items": [dict(item) for item in selected], "comparisons": comparisons},
-    }
 
 
 _VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".webm", ".m4v"})
@@ -948,45 +914,35 @@ def _codex_preparation_context(
     """Project useful preparation into the first Codex turn; full data stays in audit."""
     visual = compact_visual_evidence(attachment_evidence)
     visual_items = []
-    visual_used = 0
     all_visual_items = visual.get("items", []) if isinstance(visual.get("items"), list) else []
-    priority_indexes: list[int] = []
-    for keys in (("actual_text", "actual_visual"), ("expected_text", "expected_visual"), ("visual_difference", "mismatch_summary")):
-        index = next((index for index, item in enumerate(all_visual_items) if isinstance(item, Mapping) and any(item.get(key) for key in keys)), None)
-        if index is not None and index not in priority_indexes:
-            priority_indexes.append(index)
-    selected_indexes: list[int] = []
-    for index in [*priority_indexes, *range(len(all_visual_items))]:
-        if index in selected_indexes:
-            continue
-        item = all_visual_items[index]
+    for item in all_visual_items:
         if not isinstance(item, Mapping):
             continue
         projected_visual = {
             key: item[key]
-            for key in ("visual_item_id", "asset_role", "client", "user_path", "page", "event_or_action", "resource_key", "actual_text", "expected_text", "visual_difference", "confidence", "evidence_refs")
+            for key in (
+                "visual_item_id", "asset_role", "client", "client_evidence", "product_variant", "user_path", "page", "page_state",
+                "region_or_control", "event_or_action", "event_id", "resource_key", "actual_text", "expected_text",
+                "actual_visual", "expected_visual", "visual_difference", "mismatch_summary", "element_type", "confidence", "evidence_refs",
+            )
             if item.get(key) not in (None, "", [], {})
         }
-        if not projected_visual.get("actual_text") and item.get("highlighted_content"):
-            projected_visual["actual_text"] = item["highlighted_content"]
+        if item.get("highlighted_content"):
+            highlighted_key = "expected_text" if item.get("asset_role") == "expected_reference" else "actual_text"
+            if not projected_visual.get(highlighted_key):
+                projected_visual[highlighted_key] = item["highlighted_content"]
         if not projected_visual.get("expected_text") and item.get("expected_visual"):
             projected_visual["expected_text"] = item["expected_visual"]
-        if not projected_visual.get("visual_difference"):
-            visual_summary = item.get("mismatch_summary") or item.get("actual_visual")
-            if visual_summary:
-                projected_visual["visual_difference"] = visual_summary
-        cost = len(json.dumps(projected_visual, ensure_ascii=False))
-        if len(visual_items) >= 4 or visual_used + cost > 1_800:
-            continue
         visual_items.append(projected_visual)
-        selected_indexes.append(index)
-        visual_used += cost
-    visual_items = sorted(visual_items, key=lambda item: str(item.get("visual_item_id") or ""))
     visible_ids = {str(item.get("visual_item_id") or "") for item in visual_items}
-    comparisons = [item for item in visual.get("comparisons", []) if isinstance(item, Mapping) and set(item.get("actual_item_ids") or ()) <= visible_ids and set(item.get("expected_item_ids") or ()) <= visible_ids][:2]
+    comparisons = [
+        dict(item)
+        for item in visual.get("comparisons", [])
+        if isinstance(item, Mapping)
+        and set(item.get("actual_item_ids") or ()) <= visible_ids
+        and set(item.get("expected_item_ids") or ()) <= visible_ids
+    ]
     visual_packet = {"items": visual_items, "comparisons": comparisons}
-    if len(all_visual_items) > len(visual_items):
-        visual_packet["omitted_items"] = len(all_visual_items) - len(visual_items)
 
     starting_points = []
     for point in list(source_evidence.get("entries") or [])[:5]:
@@ -994,7 +950,11 @@ def _codex_preparation_context(
             continue
         starting_points.append(
             {
-                **{key: str(point[key])[:300] for key in ("path", "symbol", "confidence", "provenance") if point.get(key)},
+                **{
+                    key: str(point[key])[:300]
+                    for key in ("path", "symbol", "confidence", "provenance", "implementation_layer", "evidence_role")
+                    if point.get(key)
+                },
                 **({"snippet": str(point["snippet"])[:1_800]} if point.get("snippet") else {}),
                 **({"retrieval_score": point["score"]} if point.get("score") is not None else {}),
                 **{key: point[key] for key in ("entry_line", "view_range") if point.get(key) not in (None, "", [])},
@@ -1010,7 +970,16 @@ def _codex_preparation_context(
     if isinstance(architecture, Mapping) and architecture.get("status") == "ready":
         verified_source_navigation["architecture_resolution"] = {
             key: architecture[key]
-            for key in ("model", "config_path", "match_basis", "modules")
+            for key in (
+                "architecture_kind",
+                "model",
+                "config_path",
+                "resolved_project",
+                "match_basis",
+                "project_candidates",
+                "modules",
+                "runtime_config",
+            )
             if architecture.get(key) not in (None, "", [], {})
         }
 
@@ -1051,6 +1020,7 @@ def _codex_preparation_context(
             "reported_clients": list(reported_clients),
             "client_scope_status": (platform_resolution or {}).get("client_scope_status"),
             "investigation_mode": knowledge_context.investigation_mode(),
+            "candidate_implementation_layers": list((platform_resolution or {}).get("candidate_implementation_layers") or knowledge_context.query_facts.get("candidate_implementation_layers") or ()),
             "repository": repository,
         },
         "verified_source_navigation": verified_source_navigation,
@@ -1155,62 +1125,6 @@ def _build_runtime_pre_scan_audit(
     }
 
 
-def _copy_scope_item_indexes(text: str) -> set[int]:
-    number_words = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
-    indexes = {int(value) for value in re.findall(r"(?<!\d)(\d{1,2})(?!\d)", text)}
-    indexes.update(number_words[value] for value in re.findall(r"第?([一二三四五六七八九十])(?:项|处|条)?", text) if value in number_words)
-    return indexes
-
-
-def _build_confirmed_copy_scope(clarification: Mapping[str, Any], answer: str) -> dict[str, Any] | None:
-    """Bind a copy-scope answer to the stable item ids already shown to the user."""
-    if clarification.get("response_mode") != "copy_scope":
-        return None
-    raw_items = clarification.get("items")
-    if not isinstance(raw_items, list):
-        return None
-    modify_match = re.search(
-        r"(?:修改|要改|只改)\s*[:：]?\s*(.+?)(?=(?:[；;]\s*)?(?:不改|排除|跨端|基准)\s*[:：]?|$)",
-        answer,
-        re.IGNORECASE,
-    )
-    if modify_match is None:
-        return None
-    selected = _copy_scope_item_indexes(modify_match.group(1))
-    excluded_match = re.search(
-        r"(?:不改|排除)\s*[:：]?\s*(.+?)(?=(?:[；;]\s*)?(?:修改|要改|只改|跨端|基准)\s*[:：]?|$)",
-        answer,
-        re.IGNORECASE,
-    )
-    excluded = _copy_scope_item_indexes(excluded_match.group(1)) if excluded_match is not None else set()
-    if "只改" in answer:
-        excluded.update(index for index in range(1, len(raw_items) + 1) if index not in selected)
-    selected.difference_update(excluded)
-    if not selected:
-        return None
-
-    def target(index: int, raw: Mapping[str, Any]) -> dict[str, Any]:
-        return {
-            "target_id": str(raw.get("id") or f"copy_{index}"),
-            "observed_clients": [str(value) for value in raw.get("observed_clients", []) if str(value)] if isinstance(raw.get("observed_clients"), list) else [],
-            "page": str(raw.get("page") or ""),
-            "actual_text": str(raw.get("actual_text") or ""),
-            "target_text": str(raw.get("expected_text") or ""),
-        }
-
-    indexed_items = [(index, raw) for index, raw in enumerate(raw_items, start=1) if isinstance(raw, Mapping)]
-    allowed_targets = [target(index, raw) for index, raw in indexed_items if index in selected]
-    excluded_targets = [target(index, raw) for index, raw in indexed_items if index in excluded]
-    if not allowed_targets:
-        return None
-    return {
-        "scope_type": "confirmed_multi_copy",
-        "confirmed_instruction": answer.strip(),
-        "allowed_targets": allowed_targets,
-        "excluded_targets": excluded_targets,
-    }
-
-
 def build_bug_workflow(*, analyze: WorkflowNode, note: WorkflowNode):
     """Build controller routing -> specialist analysis -> one ZenTao note."""
     graph = StateGraph(BugWorkflowState)
@@ -1227,28 +1141,6 @@ class _WorkflowRequest(SimpleNamespace):
 
     async def is_disconnected(self) -> bool:
         return False
-
-
-class _ReadOnlyWorkflowStore:
-    """In-memory transition sink used only by the Phoenix replay command."""
-
-    def __init__(self, workflow_id: str, workflow: Mapping[str, Any]) -> None:
-        self.workflow_id = workflow_id
-        self.workflow = dict(workflow)
-
-    async def get(self, thread_id: str, *, user_id: str) -> dict[str, Any] | None:
-        if thread_id != self.workflow_id:
-            return None
-        return {"metadata": {"bug_workflow": dict(self.workflow)}}
-
-    async def update_metadata(self, thread_id: str, metadata: dict[str, Any], *, user_id: str) -> None:
-        workflow = metadata.get("bug_workflow")
-        if thread_id == self.workflow_id and isinstance(workflow, Mapping):
-            self.workflow.clear()
-            self.workflow.update(workflow)
-
-    async def update_status(self, thread_id: str, status: str, *, user_id: str) -> None:
-        return None
 
 
 def _workflow_request(app: Any, *, owner_user_id: str) -> _WorkflowRequest:
@@ -1286,25 +1178,16 @@ async def run_bug_workflow(
     analysis_thread_id: str,
     note_thread_id: str,
     router_run_id: str | None = None,
-    clarification_answer: str | None = None,
     clarification_round: int = 0,
     bug_snapshot: dict[str, Any] | None = None,
     affected_clients: tuple[str, ...] | None = None,
     write_note_only: bool = False,
-    read_only_replay_id: str | None = None,
-    replay_workflow: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Preflight, triage, investigate, and persist a Bug workflow from existing facts."""
     request = _workflow_request(app, owner_user_id=owner_user_id)
-    if read_only_replay_id:
-        if not isinstance(replay_workflow, Mapping):
-            raise ValueError("Phoenix replay requires the persisted workflow snapshot")
-        thread_store: Any = _ReadOnlyWorkflowStore(workflow_id, replay_workflow)
-        initial_workflow = dict(replay_workflow)
-    else:
-        thread_store = get_thread_store(request)
-        record = await thread_store.get(workflow_id, user_id=owner_user_id) if hasattr(thread_store, "get") else None
-        initial_workflow = dict(record.get("metadata", {}).get("bug_workflow", {})) if isinstance(record, dict) else {}
+    thread_store = get_thread_store(request)
+    record = await thread_store.get(workflow_id, user_id=owner_user_id) if hasattr(thread_store, "get") else None
+    initial_workflow = dict(record.get("metadata", {}).get("bug_workflow", {})) if isinstance(record, dict) else {}
     runtime = BugWorkflowRuntime(
         store=thread_store,
         workflow_id=workflow_id,
@@ -1313,23 +1196,6 @@ async def run_bug_workflow(
         workflow=initial_workflow,
     )
     current_workflow = runtime.workflow
-    phoenix = BugPhoenixTrace(workflow_id=workflow_id, bug_id=bug_id, replay_id=read_only_replay_id)
-    phoenix.start(attributes={"workflow.read_only_replay": bool(read_only_replay_id)})
-
-    def finish_phoenix(error: BaseException | None = None) -> None:
-        usage = current_workflow.get("external_token_usage")
-        phoenix.set_attributes(
-            phoenix.root,
-            {
-                "workflow.status": current_workflow.get("status"),
-                "workflow.model_call_count": current_workflow.get("external_model_call_count", 0),
-                "workflow.token_usage": usage if isinstance(usage, Mapping) else {},
-                "workflow.target_count": len(current_workflow.get("final_targets", [])) if isinstance(current_workflow.get("final_targets"), list) else 0,
-            },
-        )
-        phoenix.finish(error=error)
-        if read_only_replay_id:
-            current_workflow["phoenix_flush_succeeded"] = phoenix.force_flush()
 
     async def is_cancelled() -> bool:
         return await runtime.is_cancelled()
@@ -1345,17 +1211,13 @@ async def run_bug_workflow(
         attachment_evidence = None
     saved_triage = current_workflow.get("triage")
     triage = (
-        None
-        if read_only_replay_id
-        else (
-            dict(saved_triage)
-            if isinstance(saved_triage, Mapping)
-            and isinstance(saved_triage.get("investigation_focus"), Mapping)
-            and saved_triage.get("evidence_need") in {"visual_only", "include_technical"}
-            and isinstance(saved_triage.get("direction"), str)
-            and bool(saved_triage.get("direction", "").strip())
-            else None
-        )
+        dict(saved_triage)
+        if isinstance(saved_triage, Mapping)
+        and isinstance(saved_triage.get("investigation_focus"), Mapping)
+        and saved_triage.get("evidence_need") in {"visual_only", "include_technical"}
+        and isinstance(saved_triage.get("direction"), str)
+        and bool(saved_triage.get("direction", "").strip())
+        else None
     )
     pending_assets: list[dict[str, Any]] = []
     if not snapshot:
@@ -1377,7 +1239,6 @@ async def run_bug_workflow(
                     bug_snapshot=snapshot,
                     completion_report=completion_report,
                 )
-                finish_phoenix()
                 return
             raw_assets = bug.get("evidence_assets")
             pending_assets = [item for item in raw_assets if isinstance(item, dict)] if isinstance(raw_assets, list) else []
@@ -1391,7 +1252,6 @@ async def run_bug_workflow(
                 failure_kind="workflow_failed",
                 error=f"ZenTao preflight failed: {exc}",
             )
-            finish_phoenix(exc)
             return
 
     configured_analysis_engine = "codex"
@@ -1401,7 +1261,7 @@ async def run_bug_workflow(
     platform_model_attempts = [dict(item) for item in current_workflow.get("platform_model_attempts", []) if isinstance(item, Mapping)] if isinstance(current_workflow.get("platform_model_attempts"), list) else []
     platform_model_name = str(current_workflow.get("platform_model") or "").strip() or None
     platform_model_call_count = int(current_workflow.get("platform_model_call_count") or 0)
-    if platform_resolution_payload is None and not write_note_only and not read_only_replay_id:
+    if platform_resolution_payload is None and not write_note_only:
         analysis_config = get_app_config().bug_analysis
         platform_model_name = analysis_config.platform.model_name or "gpt-5.6-sol"
         try:
@@ -1411,6 +1271,8 @@ async def run_bug_workflow(
                 model_name=platform_model_name,
                 max_output_tokens=analysis_config.platform.max_output_tokens,
                 thread_id=workflow_id,
+                thinking_enabled=analysis_config.platform.thinking_enabled,
+                reasoning_effort=analysis_config.platform.reasoning_effort,
             )
         except Exception as exc:
             logger.warning("Bug platform resolution failed before source investigation", exc_info=True)
@@ -1434,7 +1296,6 @@ async def run_bug_workflow(
                 failure_kind="platform_resolution_failed",
                 error=f"platform_resolution_failed: {exc}",
             )
-            finish_phoenix(exc)
             return
         platform_resolution_payload = platform_resolution.payload()
         platform_usage = dict(platform_resolution.token_usage)
@@ -1617,7 +1478,6 @@ async def run_bug_workflow(
                 analysis_summary="视频尚未下载、抽帧或交给模型；源码调查尚未开始。",
                 external_conversation_id=None,
             )
-            finish_phoenix()
             return {key: value for key, value in current_workflow.items() if key in BugWorkflowState.__annotations__}
     if attachment_evidence:
         current_workflow["attachment_evidence"] = attachment_evidence
@@ -1646,31 +1506,6 @@ async def run_bug_workflow(
 
     analysis_engine = "codex"
     assert triage is not None
-    if not write_note_only and not current_workflow.get("product_clarification_completed") and not clarification_answer and isinstance(triage.get("product_decision"), Mapping):
-        clarification = _build_preanalysis_product_clarification(triage)
-        await update(
-            "awaiting_clarification",
-            router_thread_id=router_thread_id,
-            router_run_id=router_run_id,
-            analysis_thread_id=analysis_thread_id,
-            analysis_run_id=None,
-            note_thread_id=note_thread_id,
-            route="investigation",
-            route_reason="工单同时支持多个会改变业务行为或修改范围的互斥产品结果，需在源码调查前选择。",
-            specialist_agent=analysis_engine,
-            analysis_engine=analysis_engine,
-            triage=triage,
-            clarification=clarification,
-            clarification_type="product",
-            clarification_stage="pre_analysis",
-            clarification_round=clarification_round,
-            awaiting_clarification=True,
-            analysis_summary="存在真实产品分叉；尚未启动源码调查、地图查询、Specs 查询或 Bug Workbench 主调查会话。",
-            external_conversation_id=None,
-        )
-        finish_phoenix()
-        return
-
     async def analyze_with_preparation() -> dict[str, Any]:
         """Prepare shared facts, then use the configured read-only investigator."""
         app_config = get_app_config()
@@ -1678,23 +1513,11 @@ async def run_bug_workflow(
         summary_config = analysis_config.summary
         summary_model_name = f"codex/{summary_config.codex_model_name}"
         await require_codex_runtime(codex_bin=summary_config.codex_bin)
-        preanalysis_product_decision = bool(clarification_answer and current_workflow.get("clarification_stage") == "pre_analysis")
-        confirmed_copy_scope = current_workflow.get("confirmed_copy_scope")
-        preanalysis_copy_scope = preanalysis_product_decision and isinstance(confirmed_copy_scope, Mapping)
-        investigation_attachment_evidence = _scoped_copy_attachment_evidence(attachment_evidence, clarification_answer or "") if preanalysis_copy_scope else attachment_evidence
+        investigation_attachment_evidence = attachment_evidence
         investigation_snapshot = _analysis_bug_snapshot(snapshot)
         investigation_snapshot["preliminary_triage"] = triage
         if platform_resolution_payload is not None:
             investigation_snapshot["confirmed_platform"] = {key: value for key, value in platform_resolution_payload.items() if key != "raw_response"}
-        if preanalysis_product_decision:
-            investigation_snapshot["confirmed_product_decision"] = clarification_answer
-        if preanalysis_copy_scope:
-            # The human-confirmed scope replaces the often convoluted copy
-            # prose for source search. Identity fields remain available.
-            for field in ("description", "steps", "actual", "expected"):
-                investigation_snapshot.pop(field, None)
-            investigation_snapshot["confirmed_product_scope"] = clarification_answer
-            investigation_snapshot["confirmed_copy_scope"] = dict(confirmed_copy_scope)
         codex_ticket_snapshot = _codex_ticket_snapshot(investigation_snapshot)
         await update(
             "analyzing",
@@ -1714,36 +1537,19 @@ async def run_bug_workflow(
         knowledge_root = f"/mnt/repos/{primary_repository}"
         repository_root = _configured_host_mount(app_config, knowledge_root)
         shared_rn_repository_root = _configured_host_mount(app_config, "/mnt/repos/sample_mobile_repo") if primary_repository == "sample_platform_repo" else None
-        with phoenix.span(
-            "bug_workbench.knowledge_recall",
-            attributes={
-                "repository.name": primary_repository,
-                "knowledge.input": {
-                    "bug_snapshot": investigation_snapshot,
-                    "observed_clients": observed_investigation_clients,
-                    "reported_clients": reported_clients,
-                },
-            },
-        ) as knowledge_span:
-            knowledge_context = await asyncio.to_thread(
-                build_investigation_knowledge_context,
-                bug_snapshot=investigation_snapshot,
-                attachment_evidence=investigation_attachment_evidence,
-                repository_root=repository_root,
-                shared_rn_repository_root=shared_rn_repository_root,
-                observed_clients=observed_investigation_clients,
-                reported_clients=reported_clients,
-                investigation_mode=str((platform_resolution_payload or {}).get("investigation_mode") or ""),
-                client_scope_status=str((platform_resolution_payload or {}).get("client_scope_status") or ""),
-                confirmed_product_scope=clarification_answer if preanalysis_copy_scope else None,
-            )
-            phoenix.set_attributes(
-                knowledge_span,
-                {
-                    "knowledge.output": knowledge_context.payload(),
-                    "knowledge.fixed_entry_count": len(knowledge_context.compact_payload().get("recommended_starting_points", [])),
-                },
-            )
+        knowledge_context = await asyncio.to_thread(
+            build_investigation_knowledge_context,
+            bug_snapshot=investigation_snapshot,
+            attachment_evidence=investigation_attachment_evidence,
+            repository_root=repository_root,
+            shared_rn_repository_root=shared_rn_repository_root,
+            observed_clients=observed_investigation_clients,
+            reported_clients=reported_clients,
+            investigation_mode=str((platform_resolution_payload or {}).get("investigation_mode") or ""),
+            client_scope_status=str((platform_resolution_payload or {}).get("client_scope_status") or ""),
+            candidate_implementation_layers=tuple((platform_resolution_payload or {}).get("candidate_implementation_layers") or ()),
+            confirmed_product_scope=None,
+        )
         source_view_root = Path(summary_config.source_view_root).expanduser().resolve()
         source_roots = knowledge_context.allowed_repository_roots
         for container_root in source_roots:
@@ -1956,38 +1762,21 @@ async def run_bug_workflow(
                 analysis_stage="investigation" if progress.get("phase") != "report_completed" else "completed",
             )
 
-        with phoenix.span(
-            "bug_workbench.codex_investigation",
-            attributes={
-                "model.name": f"codex/{summary_config.codex_model_name}",
-                "repository.name": primary_repository,
-                "prepared_context": prepared_context,
-            },
-        ) as codex_span:
-            try:
-                conclusion = await investigate_bug_with_codex(
-                    bug_id=bug_id,
-                    repository=primary_repository,
-                    source_view_root=source_view_root,
-                    model_name=summary_config.codex_model_name,
-                    reasoning_effort=summary_config.investigation_reasoning_effort,
-                    codex_bin=summary_config.codex_bin,
-                    bug_snapshot=codex_ticket_snapshot,
-                    prepared_context=prepared_context,
-                    timeout_seconds=summary_config.investigation_timeout_seconds,
-                    progress_callback=persist_codex_progress,
-                )
-            except Exception as exc:
-                raise RuntimeError(f"analysis_execution_failed: {exc}") from exc
-            phoenix.set_attributes(
-                codex_span,
-                {
-                    "codex.thread_id": conclusion.thread_id,
-                    "codex.turn_id": conclusion.handoff_manifest.get("codex_turn_id"),
-                    "codex.token_usage": conclusion.token_usage,
-                    "codex.report": conclusion.report,
-                },
+        try:
+            conclusion = await investigate_bug_with_codex(
+                bug_id=bug_id,
+                repository=primary_repository,
+                source_view_root=source_view_root,
+                model_name=summary_config.codex_model_name,
+                reasoning_effort=summary_config.investigation_reasoning_effort,
+                codex_bin=summary_config.codex_bin,
+                bug_snapshot=codex_ticket_snapshot,
+                prepared_context=prepared_context,
+                timeout_seconds=summary_config.investigation_timeout_seconds,
+                progress_callback=persist_codex_progress,
             )
+        except Exception as exc:
+            raise RuntimeError(f"analysis_execution_failed: {exc}") from exc
         if await is_cancelled():
             return {"cancelled": True}
         report = conclusion.report
@@ -2071,8 +1860,6 @@ async def run_bug_workflow(
         return await analyze_with_preparation()
 
     async def note(state: BugWorkflowState) -> dict[str, Any]:
-        if read_only_replay_id:
-            return {}
         if state.get("cancelled") or state.get("analysis_incomplete") or state.get("awaiting_clarification") or await is_cancelled():
             return {}
         note_source = state.get("handoff") or state.get("analysis_report", "")
@@ -2226,12 +2013,7 @@ async def run_bug_workflow(
                 "note_thread_id": note_thread_id,
             }
         )
-        current_workflow["phoenix_trace_id"] = phoenix.trace_id
-        finish_phoenix()
         return dict(current_workflow)
-    except asyncio.CancelledError as exc:
-        finish_phoenix(exc)
-        raise
     except Exception as exc:
         logger.exception("Bug workflow %s failed", workflow_id)
         error_text = str(exc)
@@ -2270,8 +2052,6 @@ async def run_bug_workflow(
             error=public_error,
             **failure_details,
         )
-        current_workflow["phoenix_trace_id"] = phoenix.trace_id
-        finish_phoenix(exc)
         return dict(current_workflow)
     finally:
         # Generated acceleration only; original attachments and persisted

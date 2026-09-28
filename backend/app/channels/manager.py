@@ -611,7 +611,7 @@ def _format_feishu_incomplete_bug_analysis(bug_id: int, state: Mapping[str, Any]
 
 
 def _is_bug_workflow_cancellation(text: str) -> bool:
-    """Recognise an explicit request to abandon a paused Bug workflow."""
+    """Recognise an explicit request to stop an active or video-paused workflow."""
     return bool(_BUG_WORKFLOW_CANCEL_PATTERN.fullmatch(text))
 
 
@@ -2305,11 +2305,6 @@ class ChannelManager:
         bug_id = int(workflow.get("bug_id") or 0)
         event_type = str(event.get("event_type") or "state_updated")
         summaries = {
-            "product_target_confirmed": (
-                "已在工作台确认文案修改范围，Bug Workbench 现在开始源码调查，最终责任端与根因以源码证据为准。"
-                if _has_confirmed_preanalysis_copy_scope(workflow)
-                else "已在工作台确认产品目标，Bug Workbench 现在开始源码调查，最终责任端与根因以源码证据为准。"
-            ),
             "repair_started": "Bug 工作台已自动开始修复，Bug Workbench 正在执行。",
             "repair_accepted": "已在工作台确认验收，本次修复已完成。",
             "repair_rolled_back": "已在工作台选择回退，本次自动修改已恢复。",
@@ -2546,8 +2541,8 @@ class ChannelManager:
                         workflow.last_triage_notice = triage_notice
                 if status == "awaiting_clarification":
                     clarification = state.get("clarification")
-                    clarification_type = str(state.get("clarification_type", "product"))
-                    if clarification_type not in {"product", "video"} or state.get("clarification_stage") != "pre_analysis":
+                    clarification_type = str(state.get("clarification_type") or "")
+                    if clarification_type != "video" or state.get("clarification_stage") != "pre_analysis":
                         await self._publish_bug_workflow_message(
                             msg,
                             f"禅道 Bug #{workflow.bug_id} 是旧版只读任务，已不再支持补充技术证据后继续调查。请重新发送该 Bug ID 创建当前流程。",
@@ -2556,13 +2551,9 @@ class ChannelManager:
                         return
                     question = clarification.get("question") if isinstance(clarification, dict) else None
                     options = clarification.get("options") if isinstance(clarification, dict) else None
-                    response_mode = clarification.get("response_mode") if isinstance(clarification, dict) else None
-                    copy_items = clarification.get("items") if isinstance(clarification, dict) else None
-                    decision_reason = str(clarification.get("decision_reason") or "").strip() if isinstance(clarification, dict) else ""
-                    decision_impact = str(clarification.get("decision_impact") or "").strip() if isinstance(clarification, dict) else ""
                     option_text = ""
+                    cleaned: list[str] = []
                     if isinstance(options, list):
-                        cleaned = []
                         for option in options:
                             label = option.get("label") if isinstance(option, dict) else option
                             if isinstance(label, str) and label.strip():
@@ -2570,37 +2561,10 @@ class ChannelManager:
                         if cleaned:
                             option_text = "\n可选：" + "；".join(f"{chr(65 + index)}：{label}" for index, label in enumerate(cleaned[:4]))
                     prompt = str(question).strip() if isinstance(question, str) else "请补充本次分析所需的关键信息。"
-                    if response_mode == "copy_scope":
-                        copy_scope_kind = str(clarification.get("copy_scope_kind") or "default") if isinstance(clarification, dict) else "default"
-                        item_lines: list[str] = []
-                        for index, item in enumerate(copy_items if isinstance(copy_items, list) else [], start=1):
-                            if not isinstance(item, Mapping):
-                                continue
-                            clients = "/".join(str(value).upper() if str(value).lower() != "ios" else "iOS" for value in item.get("observed_clients", []) if value) or "客户端待确认"
-                            page = str(item.get("page") or "").strip()
-                            actual = str(item.get("actual_text") or "未提取").strip()
-                            expected = str(item.get("expected_text") or "未提供").strip()
-                            item_lines.append(f"{index}. {clients}{f' · {page}' if page else ''}\n当前：{actual}\n参考：{expected}")
-                        option_text = ("\n\n待确认文案：\n" + "\n\n".join(item_lines)) if item_lines else ""
-                        suffix = (
-                            "\n请按“修改：编号→目标文案；不改：编号”回复。确认后 Bug Workbench 将开始源码调查，并在 Harmony 原生与 Harmony RN 中确认真实责任归属。"
-                            if copy_scope_kind == "harmony"
-                            else "\n请按“修改：编号→目标文案；不改：编号；跨端基准：Android/iOS/新文案”回复。确认后 Bug Workbench 将开始源码调查，最终责任端与根因以源码证据为准。"
-                        )
-                        intro = f"禅道 Bug #{workflow.bug_id} 的工单呈现多项用户可见文案差异，需要先确认本次产品目标和排除项。"
-                    else:
-                        suffix = f"\n请直接回复 {'、'.join(chr(65 + index) for index in range(len(cleaned[:4])))}，或回复其中一个选项的完整文字。" if response_mode == "choice" else "\n请只回复修改后的完整最终文案，不要描述修改方式。"
-                        intro = (
-                            f"禅道 Bug #{workflow.bug_id} 的视频是唯一有效附件，需要先确认是否下载并分析。" if clarification_type == "video" else f"禅道 Bug #{workflow.bug_id} 需要先确认最终产品目标；确认后 Bug Workbench 才会开始源码调查。"
-                        )
-                    decision_context = ""
-                    if decision_reason:
-                        decision_context += f"\n需要选择的原因：{decision_reason}"
-                    if decision_impact:
-                        decision_context += f"\n选择影响：{decision_impact}"
+                    suffix = f"\n请直接回复 {'、'.join(chr(65 + index) for index in range(len(cleaned[:4])))}，或回复其中一个选项的完整文字。"
                     await self._publish_bug_workflow_message(
                         msg,
-                        f"{intro}{decision_context}\n问题：{prompt}{option_text}{suffix}",
+                        f"禅道 Bug #{workflow.bug_id} 的视频是唯一有效附件，需要先确认是否下载并分析。\n问题：{prompt}{option_text}{suffix}",
                     )
                     return
                 if status == "repairing":
@@ -2783,20 +2747,21 @@ class ChannelManager:
                 )
                 return True
 
-        if existing is not None and existing.status in _BUG_WORKFLOW_WAITING_STATUSES:
-            if _is_bug_workflow_cancellation(text):
-                try:
-                    await self._cancel_bug_workflow(msg, existing.workflow_id)
-                except Exception:
-                    logger.exception("[Manager] failed to cancel Bug workflow: workflow=%s", existing.workflow_id)
-                    await self._publish_bug_workflow_message(msg, f"禅道 Bug #{existing.bug_id} 停止失败，请稍后重试。")
-                    return True
-                self._bug_workflow_conversations.pop(conversation_key, None)
-                await self._publish_bug_workflow_message(
-                    msg,
-                    f"已停止禅道 Bug #{existing.bug_id} 的当前分析，未写入禅道备注。现在可以发送正确的 Bug ID。",
-                )
+        if existing is not None and existing.status in (_BUG_WORKFLOW_ACTIVE_STATUSES | _BUG_WORKFLOW_WAITING_STATUSES) and _is_bug_workflow_cancellation(text):
+            try:
+                await self._cancel_bug_workflow(msg, existing.workflow_id)
+            except Exception:
+                logger.exception("[Manager] failed to cancel Bug workflow: workflow=%s", existing.workflow_id)
+                await self._publish_bug_workflow_message(msg, f"禅道 Bug #{existing.bug_id} 停止失败，请稍后重试。")
                 return True
+            self._bug_workflow_conversations.pop(conversation_key, None)
+            await self._publish_bug_workflow_message(
+                msg,
+                f"已停止禅道 Bug #{existing.bug_id} 的当前分析；本地工作流与正在运行的 Codex 调查均已中断，排队工作不会继续。",
+            )
+            return True
+
+        if existing is not None and existing.status in _BUG_WORKFLOW_WAITING_STATUSES:
             if bug_id is not None and bug_id != existing.bug_id:
                 await self._publish_bug_workflow_message(
                     msg,
@@ -2812,12 +2777,10 @@ class ChannelManager:
 
         if existing is not None and existing.status == "awaiting_clarification" and bug_id is None:
             answer = text.strip()
-            preanalysis_copy_confirmation = False
-            video_confirmation = False
             try:
                 state = await self._get_bug_workflow(msg, existing.workflow_id)
-                clarification_type = str(state.get("clarification_type", "product"))
-                if clarification_type not in {"product", "video"} or state.get("clarification_stage") != "pre_analysis":
+                clarification_type = str(state.get("clarification_type") or "")
+                if clarification_type != "video" or state.get("clarification_stage") != "pre_analysis":
                     self._bug_workflow_conversations.pop(conversation_key, None)
                     await self._publish_bug_workflow_message(
                         msg,
@@ -2826,9 +2789,7 @@ class ChannelManager:
                     return True
                 option_id: str | None = None
                 clarification = state.get("clarification")
-                video_confirmation = clarification_type == "video"
-                preanalysis_copy_confirmation = clarification_type == "product" and isinstance(clarification, Mapping) and str(clarification.get("response_mode") or "") == "copy_scope"
-                if clarification_type in {"product", "video"} and isinstance(clarification, Mapping) and str(clarification.get("response_mode") or "") == "choice":
+                if isinstance(clarification, Mapping) and str(clarification.get("response_mode") or "") == "choice":
                     options = [item for item in clarification.get("options", []) if isinstance(item, Mapping)]
                     choice_match = re.fullmatch(r"\s*([A-Da-d])[。.!！]?\s*", answer)
                     if choice_match:
@@ -2849,13 +2810,10 @@ class ChannelManager:
                 return True
             existing.status = str(payload.get("status", "analyzing"))
             self._watch_bug_workflow(msg, conversation_key)
-            if video_confirmation:
-                message = f"已记录禅道 Bug #{existing.bug_id} 的视频分析选择，Bug Workbench 将按该选择继续处理附件和源码调查。"
-            elif preanalysis_copy_confirmation:
-                message = f"已确认禅道 Bug #{existing.bug_id} 的文案修改范围。Bug Workbench 现在开始源码调查，最终责任端与根因以源码证据为准。"
-            else:
-                message = f"已确认禅道 Bug #{existing.bug_id} 的最终产品目标。Bug Workbench 现在开始源码调查，最终责任端与根因以源码证据为准。"
-            await self._publish_bug_workflow_message(msg, message)
+            await self._publish_bug_workflow_message(
+                msg,
+                f"已记录禅道 Bug #{existing.bug_id} 的视频分析选择，Bug Workbench 将按该选择继续处理附件和源码调查。",
+            )
             return True
 
         if bug_id is None and _is_bug_workflow_followup(text):

@@ -140,13 +140,6 @@ export type BugWorkflow = {
         | "attachment";
       evidence_goal: string;
     }>;
-    product_decision?: {
-      question: string;
-      reason: string;
-      impact: string;
-      options: Array<{ id: string; label: string; value: string }>;
-    } | null;
-    needs_product_confirmation?: boolean;
     display_name?: string;
   } | null;
   triage_model?: string | null;
