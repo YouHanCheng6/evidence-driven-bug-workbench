@@ -105,3 +105,8 @@ presentation/
 *.audit.jsonl
 *backlog-manifest.json
 *backlog-progress.json
+*wiki-mcp.json
+.deerflow-runtime-evidence/
+composite-repositories/
+personal_rail/
+miniprogram-exam/

@@ -12,7 +12,7 @@ from pathlib import Path
 DEFAULT_ROOT = Path(__file__).resolve().parents[1]
 SELF = Path(__file__).resolve()
 SKIP_DIRS = {'.git', '.venv', 'node_modules', '__pycache__', '.next', '.pnpm-store'}
-PRIVATE_DIRS = {'.deer-flow', '.openhands', '.claude', '.codex', 'source-views'}
+PRIVATE_DIRS = {'.deer-flow', '.openhands', '.claude', '.codex', 'source-views', '.deerflow-runtime-evidence', 'composite-repositories', '.codex-deerflow'}
 RUNTIME_DIRS = {'uploads', 'secrets', 'logs'}
 PRIVATE_NAMES = {'.DS_Store', '.jwt_secret', 'config.yaml', 'extensions_config.json', 'mcp_config.json', 'credentials.json', 'auth.json', 'id_rsa', 'id_ed25519'}
 PRIVATE_SUFFIXES = {'.db', '.sqlite', '.sqlite3', '.log', '.pem', '.key', '.p12', '.pfx', '.mobileprovision'}
@@ -48,7 +48,7 @@ def scan(root: Path) -> tuple[int, list[str]]:
                         (len(relative.parts) > 1 and relative.parts[0] in {'backend', 'frontend'} and relative.parts[1] in RUNTIME_DIRS))
         if PRIVATE_DIRS.intersection(relative.parts) or runtime_root:
             findings.append(f'private runtime directory: {relative}')
-        if (path.name in PRIVATE_NAMES or path.suffix.lower() in PRIVATE_SUFFIXES
+        if (path.name in PRIVATE_NAMES or path.name.endswith('wiki-mcp.json') or path.suffix.lower() in PRIVATE_SUFFIXES
                 or (path.name.startswith('.env') and path.name != '.env.example')
                 or re.search(r'\.db-(?:wal|shm|journal)$', path.name)):
             findings.append(f'private file: {relative}')

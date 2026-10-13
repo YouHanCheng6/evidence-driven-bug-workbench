@@ -921,9 +921,27 @@ def _codex_preparation_context(
         projected_visual = {
             key: item[key]
             for key in (
-                "visual_item_id", "asset_role", "client", "client_evidence", "product_variant", "user_path", "page", "page_state",
-                "region_or_control", "event_or_action", "event_id", "resource_key", "actual_text", "expected_text",
-                "actual_visual", "expected_visual", "visual_difference", "mismatch_summary", "element_type", "confidence", "evidence_refs",
+                "visual_item_id",
+                "asset_role",
+                "client",
+                "client_evidence",
+                "product_variant",
+                "user_path",
+                "page",
+                "page_state",
+                "region_or_control",
+                "event_or_action",
+                "event_id",
+                "resource_key",
+                "actual_text",
+                "expected_text",
+                "actual_visual",
+                "expected_visual",
+                "visual_difference",
+                "mismatch_summary",
+                "element_type",
+                "confidence",
+                "evidence_refs",
             )
             if item.get(key) not in (None, "", [], {})
         }
@@ -935,13 +953,7 @@ def _codex_preparation_context(
             projected_visual["expected_text"] = item["expected_visual"]
         visual_items.append(projected_visual)
     visible_ids = {str(item.get("visual_item_id") or "") for item in visual_items}
-    comparisons = [
-        dict(item)
-        for item in visual.get("comparisons", [])
-        if isinstance(item, Mapping)
-        and set(item.get("actual_item_ids") or ()) <= visible_ids
-        and set(item.get("expected_item_ids") or ()) <= visible_ids
-    ]
+    comparisons = [dict(item) for item in visual.get("comparisons", []) if isinstance(item, Mapping) and set(item.get("actual_item_ids") or ()) <= visible_ids and set(item.get("expected_item_ids") or ()) <= visible_ids]
     visual_packet = {"items": visual_items, "comparisons": comparisons}
 
     starting_points = []
@@ -950,11 +962,7 @@ def _codex_preparation_context(
             continue
         starting_points.append(
             {
-                **{
-                    key: str(point[key])[:300]
-                    for key in ("path", "symbol", "confidence", "provenance", "implementation_layer", "evidence_role")
-                    if point.get(key)
-                },
+                **{key: str(point[key])[:300] for key in ("path", "symbol", "confidence", "provenance", "implementation_layer", "evidence_role") if point.get(key)},
                 **({"snippet": str(point["snippet"])[:1_800]} if point.get("snippet") else {}),
                 **({"retrieval_score": point["score"]} if point.get("score") is not None else {}),
                 **{key: point[key] for key in ("entry_line", "view_range") if point.get(key) not in (None, "", [])},
@@ -1003,8 +1011,8 @@ def _codex_preparation_context(
             projected["sources"] = sources
         return projected
 
-    direct = [runtime_excerpt(item) for item in runtime_pre_scan.get("transmitted_runtime_evidence", []) if isinstance(item, Mapping)][:2]
-    candidates = [runtime_excerpt(item) for item in runtime_pre_scan.get("candidate_runtime_context", []) if isinstance(item, Mapping)][:1]
+    direct = [runtime_excerpt(item) for item in runtime_pre_scan.get("transmitted_runtime_evidence", []) if isinstance(item, Mapping)]
+    candidates = [runtime_excerpt(item) for item in runtime_pre_scan.get("candidate_runtime_context", []) if isinstance(item, Mapping)]
     business = knowledge_context.business_knowledge
     rules = [dict(item) for item in business.get("rules", []) if isinstance(item, Mapping) and item.get("applicability") in {"matched", "conditional_reference"}]
     selected_rules = []
@@ -1030,11 +1038,16 @@ def _codex_preparation_context(
     if selected_rules:
         packet["business_reference_only"] = {"semantics": "reference_only", "rules": selected_rules}
     if direct or candidates:
-        packet["runtime_observations"] = {"accepted_evidence": direct, "candidate_context_unverified": candidates}
+        log_expert = runtime_pre_scan.get("log_expert")
+        packet["runtime_observations"] = {
+            "curation_status": log_expert.get("status") if isinstance(log_expert, Mapping) else None,
+            "accepted_evidence": direct,
+            "candidate_context_unverified": candidates,
+        }
     if log_index_ready:
         packet["log_query"] = {
-            "command": f"python .deerflow-log-query.py --run {runtime_log_run} --signal '<actual-source-field>'",
-            "scope": "按实际读到的源码字段追加查询；结果仅为运行观察。",
+            "command": f"python .deerflow-log-query.py --run {runtime_log_run} --signal '<actual-source-field>' [--at HH:MM:SS]",
+            "scope": "按实际字段检索；已知失败时刻可用 --at 精确定位同一时段，不能把工单时间当作唯一过滤条件。结果仅为运行观察。",
         }
     return packet
 
@@ -1086,12 +1099,36 @@ def _build_runtime_pre_scan_audit(
                 item["sources"] = [*raw.get("sources", []), *[{key: link[key] for key in ("source", "line_start", "line_end", "quote")} for link in links[:2]]]
                 item["identity_association"] = "same_parsed_device_record; observation only, not causal proof"
                 transmitted.append(item)
-        if len(transmitted) >= 3:
-            break
     candidate_context: list[dict[str, Any]] = []
     candidate_context_chars = 0
     selected_ids = {tuple(item.get("candidate_ids", [])) for item in transmitted}
-    for item in expert_payload.get("selections", []):
+    selections = expert_payload.get("selections", [])
+    selections = list(selections) if isinstance(selections, list) else []
+    # A curator may select one side of a collection discrepancy and omit the
+    # other. Keep the highest-ranked complete raw snapshots as unverified
+    # context, without treating their cross-source identity as established.
+    raw_snapshot_limit = 4 if expert_payload.get("status") == "model_failed" else 2
+    selected_candidate_ids = {str(value) for item in [*transmitted, *selections] if isinstance(item, Mapping) for value in item.get("candidate_ids", [])}
+    raw_snapshots = [
+        {
+            "candidate_ids": [item["id"]],
+            "relevance": "supporting",
+            "summary": f"原始完整集合快照：{item.get('field') or '字段未命名'}，{len(item['ids'])} 项",
+            "proven": "原始日志含完整成员列表",
+            "unproven": "尚未核对是否为本次设备、同一事务及跨端同义字段",
+            "sources": [{"candidate_id": item["id"], **{key: item[key] for key in ("source", "line_start", "line_end", "quote") if key in item}}],
+        }
+        for item in (material_payload.get("candidates") if isinstance(material_payload.get("candidates"), list) else [])
+        if isinstance(item, Mapping)
+        and item.get("id")
+        and str(item["id"]) not in selected_candidate_ids
+        and item.get("kind") == "collection_snapshot"
+        and item.get("complete") is True
+        and isinstance(item.get("ids"), list)
+        and item.get("quote")
+    ][:raw_snapshot_limit]
+    selections = [*raw_snapshots, *selections]
+    for item in selections:
         if not isinstance(item, Mapping) or item.get("relevance") not in {"direct", "supporting"}:
             continue
         if tuple(item.get("candidate_ids", [])) in selected_ids or not item.get("summary") or not item.get("proven"):
@@ -1105,8 +1142,7 @@ def _build_runtime_pre_scan_audit(
             continue
         candidate_context.append(projected)
         candidate_context_chars += cost
-        if len(candidate_context) >= 2:
-            break
+        selected_ids.add(tuple(item.get("candidate_ids", [])))
     return {
         "rule_version": _RUNTIME_PRE_SCAN_RULE_VERSION,
         "collection_policy": "broad_provenance_preserving_material_then_model_curation",
@@ -1506,6 +1542,7 @@ async def run_bug_workflow(
 
     analysis_engine = "codex"
     assert triage is not None
+
     async def analyze_with_preparation() -> dict[str, Any]:
         """Prepare shared facts, then use the configured read-only investigator."""
         app_config = get_app_config()
@@ -1686,11 +1723,7 @@ async def run_bug_workflow(
             analysis_thread_id=analysis_thread_id,
             note_thread_id=note_thread_id,
             route="investigation",
-            route_reason=(
-                "工单、附件与日志事实已通过 Tabby 仓库上下文检索，并按当前检出源码重新校验。"
-                if source_evidence.get("status") == "ready"
-                else "前置检索没有形成当前源码候选；Codex 将直接从规范事实包调查。"
-            ),
+            route_reason=("工单、附件与日志事实已通过 Tabby 仓库上下文检索，并按当前检出源码重新校验。" if source_evidence.get("status") == "ready" else "前置检索没有形成当前源码候选；Codex 将直接从规范事实包调查。"),
             specialist_agent=analysis_engine,
             analysis_engine=analysis_engine,
             reported_clients=list(reported_clients),

@@ -13,6 +13,12 @@ Runtime compatibility is not established. Validate offline changes with
 `python3.12 -m unittest discover -s tests/public_release -v`; these do not substitute
 for end-to-end workflow tests. See `docs/personal/REDACTION_AND_LIMITATIONS.md`.
 
+The 2026-10-13 snapshot adds evidence-role investigation, ranked retrieval
+fusion, streaming private log indexes, ephemeral visual extraction and an
+optional `examplewiki` interface. Its eight `example_*` read tools are fictional
+adapter names; deployers must implement their own authorized mapping. Never
+include the actual connection JSON or remote knowledge content in this repo.
+
 This file provides guidance to AI coding agents (Claude Code, Codex, and others) when working with code in this repository. It is the source of truth; the sibling `CLAUDE.md` imports it via `@AGENTS.md`.
 
 It is the **monorepo orientation layer**: it maps the whole repo and points to the

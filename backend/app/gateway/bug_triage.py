@@ -149,19 +149,11 @@ def observed_clients(snapshot: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(values))
 
 
-
-
 def _required_contract_text(value: Any, field: str, *, limit: int = 700) -> str:
     compact = re.sub(r"\s+", " ", str(value or "")).strip()
     if not compact:
         raise ValueError(f"triage {field} is required")
     return compact[:limit]
-
-
-
-
-
-
 
 
 def _fallback_investigation_focus(snapshot: Mapping[str, Any]) -> BugInvestigationFocus:
@@ -190,8 +182,6 @@ def _fallback_investigation_focus(snapshot: Mapping[str, Any]) -> BugInvestigati
             else "unknown"
         ),
     )
-
-
 
 
 def unknown_triage(snapshot: Mapping[str, Any], reason: str) -> BugTriageResult:

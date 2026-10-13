@@ -123,6 +123,10 @@ bug_analysis:
     # GLM-5.3-Flash), enable thinking and select its documented low effort.
     thinking_enabled: false
     reasoning_effort: null
+  visual:
+    # Fresh, ephemeral, tool-free turn: extract visible screenshot facts only.
+    model_name: gpt-6-luna
+    reasoning_effort: medium
   log_expert:
     # One optional no-tools call curates bounded raw log excerpts before Codex.
     # Prefer a fast structured-output model; failures leave the source path unchanged.

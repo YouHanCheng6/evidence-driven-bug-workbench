@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import hashlib
 import io
 import json
@@ -13,17 +12,15 @@ import re
 import shutil
 import zipfile
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from imageio_ffmpeg import get_ffmpeg_exe
-from langchain_core.messages import HumanMessage, SystemMessage
 from zentao_mcp.client import ZentaoError
 
 from deerflow.config import get_app_config
-from deerflow.models import create_chat_model
 from deerflow.uploads.manager import claim_unique_filename, normalize_filename
-from deerflow.utils.llm_text import extract_response_text
 
 MAX_EVIDENCE_FILES = 10
 MAX_EVIDENCE_FILE_BYTES = 50 * 1024 * 1024
@@ -35,8 +32,6 @@ MAX_VISUAL_FILE_BYTES = 8 * 1024 * 1024
 MAX_VISUAL_EVIDENCE_ITEMS = 24
 MAX_VISUAL_COMPARISONS = 12
 VISUAL_EVIDENCE_SCHEMA_VERSION = 2
-VISUAL_ANALYZER_MODEL = "volc-doubao-seed-2-1-pro"
-VISUAL_ANALYZER_TEMPERATURE = 0.0
 MAX_ARCHIVE_MEMBERS = 20
 MAX_ARCHIVE_MEMBER_BYTES = 5 * 1024 * 1024
 MAX_ARCHIVE_TOTAL_BYTES = 20 * 1024 * 1024
@@ -140,11 +135,7 @@ def _derive_visual_comparisons(items: list[dict[str, Any]]) -> list[dict[str, An
             anchor = _comparison_anchor(actual.get(field))
             if not anchor:
                 continue
-            matches = [
-                expected
-                for expected in expected_items
-                if expected["visual_item_id"] != actual["visual_item_id"] and _comparison_anchor(expected.get(field)) == anchor
-            ]
+            matches = [expected for expected in expected_items if expected["visual_item_id"] != actual["visual_item_id"] and _comparison_anchor(expected.get(field)) == anchor]
             if len(matches) == 1:
                 add(
                     [actual["visual_item_id"]],
@@ -223,15 +214,7 @@ def _minimal_visual_evidence(value: Any, *, allowed_asset_names: set[str] | None
                 evidence_refs.append(normalized_ref)
             if len(evidence_refs) >= MAX_VISUAL_FILES:
                 break
-        evidence_refs = [
-            dict(values)
-            for _identity, values in sorted(
-                {
-                    (reference.get("asset", ""), reference.get("role", ""), reference.get("annotation", "")): reference
-                    for reference in evidence_refs
-                }.items()
-            )
-        ]
+        evidence_refs = [dict(values) for _identity, values in sorted({(reference.get("asset", ""), reference.get("role", ""), reference.get("annotation", "")): reference for reference in evidence_refs}.items())]
         result.append(
             {
                 "visual_item_id": f"visual_{len(result) + 1}",
@@ -675,64 +658,83 @@ async def _extract_video_frames(video: Path) -> list[Path]:
 
 
 async def _default_visual_analyzer(paths: list[Path], *, ticket_sections: Mapping[str, str] | None = None, thinking_enabled: bool = False) -> str:
-    blocks: list[dict[str, Any]] = [
-        {
-            "type": "text",
-            "text": (
-                "这些图片来自同一个禅道 UI Bug。必须逐张判断 asset_role：actual_app_screenshot、cross_client_app_screenshot、"
-                "reference_table、expected_reference、desktop_document 或 supplementary_material。"
-                "若文件注明了禅道正文段落归属，该归属是工单事实：预期图只描述预期，实际图只描述实际；未注明时再根据图片判断。"
-                "不要识别、猜测或输出设备型号、操作系统、客户端平台、Native/RN 或仓库；这些由工单文字和源码调查的独立链路确认。"
-                "红框、箭头、高亮、下划线和批注是最高优先级证据：单独识别其中的文字、图片、图标、控件和视觉状态，"
-                "并保留少量页面、Tab、产品、横竖屏和操作路径上下文。每一个被标注的独立文案差异必须单独输出一个 item，"
-                "禁止把三条事件文案用分号拼成一个 actual/expected。无论是否存在预期材料，都必须先完整输出实际截图中的事实；"
-                "没有预期材料时不得猜测预期，也不得因为无法配对而省略实际事实。仅当实际与预期属于同一页面、控件或业务事件时，"
-                "才将它们放入同一个 item，并在 evidence_refs 中同时引用实际与预期文件；无法确定时分别输出，不能强行配对。"
-                "实际或预期是图片/布局而非文案时，必须分别写入 actual_visual、expected_visual 和 visual_difference，不能留空后只描述页面。"
-                "visual_difference 必须写清可见异常本身，例如遮挡、白边、缺值、裁切、顺序、状态或布局差异，不能只重复区域名称。"
-                "输出 JSON：{items:[{asset_role,product_variant,user_path,page,region_or_control,page_state,"
-                "actual_visible_text,expected_visible_text,highlighted_content,actual_visual,expected_visual,visual_difference,"
-                "event_or_action,event_id,resource_key,"
-                "element_type,mismatch_summary,confidence,evidence_refs:[{asset,role,annotation}]}]}。"
-                "evidence_refs 必须使用下方提供的真实文件名；annotation 写 red_box、arrow、highlight、underline、note 或 none。"
-                "预期材料开头的 #time# 是时间占位符，输出 expected_visible_text 时删除它。"
-                "不要输出源码、实现归属、根因或修复建议，也不要把未标注的大量页面内容当成重点。"
-                "不要复述 Token、Cookie、密码、密钥或个人隐私，统一写成 [REDACTED]。"
-            ),
-        }
-    ]
-    accepted = 0
+    """Extract screenshot facts in one fresh, tool-free Codex Luna turn."""
+    from openai_codex import ApprovalMode, AsyncCodex, LocalImageInput, Sandbox, TextInput
+    from openai_codex.generated.v2_all import ReasoningEffort
+
+    from app.gateway.bug_codex_summary import _codex_config
+
+    accepted: list[Path] = []
     for path in paths:
         try:
-            payload = path.read_bytes()
+            size = path.stat().st_size
         except OSError:
             continue
-        if not payload or len(payload) > MAX_VISUAL_FILE_BYTES:
-            continue
-        media_type = mimetypes.guess_type(path.name)[0] or "image/jpeg"
-        section = (ticket_sections or {}).get(path.name)
-        section_label = "预期结果" if section == "expected" else "实际结果" if section == "actual" else "未标明"
-        blocks.append({"type": "text", "text": f"文件：{path.name}；禅道正文段落：{section_label}"})
-        blocks.append({"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{base64.b64encode(payload).decode('ascii')}"}})
-        accepted += 1
-        if accepted >= MAX_VISUAL_FILES:
+        if 0 < size <= MAX_VISUAL_FILE_BYTES:
+            accepted.append(path)
+        if len(accepted) >= MAX_VISUAL_FILES:
             break
     if not accepted:
         return ""
-    model = create_chat_model(
-        name=VISUAL_ANALYZER_MODEL,
-        thinking_enabled=thinking_enabled,
-        app_config=get_app_config(),
-        model_overrides={"temperature": VISUAL_ANALYZER_TEMPERATURE},
+
+    prompt = (
+        "逐张、逐面板提取这些禅道 Bug 图片里的可见事实。优先读取红框、箭头、高亮、下划线和批注，"
+        "但不得漏掉同一长图或拼图中的其他独立异常；每个独立文案、控件状态或布局事实单独一个 item。"
+        "正文已标明预期/实际时必须服从该标记；未标明时才判断 asset_role。不要判断产品、客户端、"
+        "Native/RN、源码归属、根因或修复方案，不可猜测不可见内容。敏感值写 [REDACTED]。"
+        '只输出 JSON，不加 Markdown：{"items":[{"asset_role":"actual_app_screenshot|expected_reference|'
+        'reference_table|desktop_document|supplementary_material","page":"","region_or_control":"",'
+        '"page_state":"","actual_visible_text":"","expected_visible_text":"",'
+        '"highlighted_content":"","actual_visual":"","expected_visual":"",'
+        '"visual_difference":"","element_type":"","event_or_action":"",'
+        '"confidence":"high|medium|low","evidence_refs":[{"asset":"真实文件名",'
+        '"role":"与asset_role相同","annotation":"red_box|arrow|highlight|underline|note|none"}]}]}。'
+        "没有预期材料时保留全部实际事实，不得补造预期；#time# 仅为预期时间占位符，转写时删除。"
     )
-    response = await model.ainvoke(
-        [
-            SystemMessage(content="你是只读视觉证据提取器。输出事实，不做修复决策。"),
-            HumanMessage(content=blocks),
-        ],
-        config={"run_name": "bug-attachment-visual-evidence"},
+    items: list[Any] = [TextInput(prompt)]
+    for path in accepted:
+        section = (ticket_sections or {}).get(path.name)
+        section_label = "预期结果" if section == "expected" else "实际结果" if section == "actual" else "未标明"
+        items.extend((TextInput(f"文件：{path.name}；禅道正文段落：{section_label}"), LocalImageInput(str(path))))
+
+    app_config = get_app_config()
+    visual_config = app_config.bug_analysis.visual
+    base_config = _codex_config(app_config.bug_analysis.summary.codex_bin)
+    codex_config = replace(
+        base_config,
+        cwd=str(accepted[0].parent),
+        config_overrides=base_config.config_overrides
+        + (
+            "features.shell_tool=false",
+            "features.unified_exec=false",
+            "features.apply_patch_freeform=false",
+            "features.multi_agent=false",
+            "features.apps=false",
+            "features.plugins=false",
+            "features.remote_plugin=false",
+            "features.view_image=false",
+            "features.image_generation=false",
+            'web_search="disabled"',
+            "project_doc_max_bytes=0",
+        ),
     )
-    return extract_response_text(response.content).strip()
+    async with AsyncCodex(codex_config) as codex:
+        account = await codex.account()
+        if account.requires_openai_auth and account.account is None:
+            raise RuntimeError("Local Codex is not authenticated for Bug visual evidence")
+        thread = await codex.thread_start(
+            ephemeral=True,
+            service_name="deerflow_bug_visual_evidence",
+            model=visual_config.model_name,
+            cwd=str(accepted[0].parent),
+            sandbox=Sandbox.read_only,
+            approval_mode=ApprovalMode.deny_all,
+            developer_instructions=(
+                "You are a read-only visual fact extractor. Use only the supplied images and text. Do not use tools, inspect the filesystem, infer source ownership, or propose a fix. Return the requested JSON as the entire final response."
+            ),
+        )
+        result = await thread.run(items, effort=ReasoningEffort(visual_config.reasoning_effort))
+    return (result.final_response or "").strip()
 
 
 def _apply_ticket_sections(evidence: dict[str, Any], ticket_sections: Mapping[str, str]) -> dict[str, Any]:
@@ -947,9 +949,7 @@ async def collect_bug_attachment_evidence(
                     ticket_sections=visual_ticket_sections,
                 )
                 quality_summary = _visual_quality_summary(normalized_evidence)
-                response_sha256 = hashlib.sha256(
-                    (raw_evidence if isinstance(raw_evidence, str) else json.dumps(raw_evidence, ensure_ascii=False, sort_keys=True)).encode("utf-8")
-                ).hexdigest()
+                response_sha256 = hashlib.sha256((raw_evidence if isinstance(raw_evidence, str) else json.dumps(raw_evidence, ensure_ascii=False, sort_keys=True)).encode("utf-8")).hexdigest()
                 selected_thinking_enabled = thinking_enabled
                 if normalized_valid and normalized_evidence.get("items") and quality_summary.get("usable"):
                     break
@@ -961,9 +961,10 @@ async def collect_bug_attachment_evidence(
                 visual_error = "视觉分析失败"
                 logger.exception("Bug attachment visual analysis failed: thinking_enabled=%s", thinking_enabled)
         visual_evidence = normalized_evidence
+        visual_config = get_app_config().bug_analysis.visual
         visual_evidence["extractor"] = {
-            "model": VISUAL_ANALYZER_MODEL,
-            "temperature": VISUAL_ANALYZER_TEMPERATURE,
+            "model": f"codex/{visual_config.model_name}",
+            "reasoning_effort": visual_config.reasoning_effort,
             "schema_version": VISUAL_EVIDENCE_SCHEMA_VERSION,
             "attempt_count": attempt_count,
             "thinking_enabled": selected_thinking_enabled,

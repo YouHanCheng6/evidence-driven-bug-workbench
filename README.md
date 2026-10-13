@@ -25,7 +25,9 @@
   → 按产品配置和实现层平衡候选
   → 当前 checkout 逐条精确校验，最多保留 5 个源码窗口
   → 一次全新的只读 Codex 调查会话
-  → 已验证入口若已无故障，允许一次有边界的文件级 Git 历史查询
+  → 按材料角色核对入口、故障机制、现象与责任边界
+  → 有嵌入式故障证据时，可选查询示例 WIKI 只读接口
+  → 明确回归/版本问题或已知直接变更时，才允许一次文件级历史查询
   → 生成并校验四段式中文报告
   → 只投影第三、四节到工单备注，POST 仅一次
   → 页面优先、历史接口兜底地读回确认
@@ -34,6 +36,8 @@
 
 导航提示不是根因证据。进入报告的每个源码片段都必须能在选定仓库的当前 checkout 中精确复核；Codex 只能读取源码，不能编辑、安装依赖、运行修复或直接写工单。新流程也不再启动 OpenHands、独立总结模型或自动修复 Agent。历史真实 diff 仍可展示与回滚，但不能从新任务重新触发。
 
+2026-10-13 更新：截图事实由独立、临时、无工具的 Codex 回合提取，公开副本已移除旧视觉模型实现。调查时仅在已有证据形成嵌入式故障假设后使用可选 `examplewiki`；其中八个 `example_*` 工具名均为示例接口，没有实际企业 WIKI 内容或连接配置。日志准备采用分块流式索引，保留有界完整成员集合；源码检索把各通道分别排序后按文件融合。模型名称属于可配置示例，不代表账号凭据。
+
 ## 个人定制重点
 
 | 能力 | 设计价值 | 主要实现 |
@@ -41,15 +45,17 @@
 | 持久状态机 | 准备、调查、报告、写回和失败状态可恢复 | `backend/app/gateway/bug_workflow_state.py` |
 | 事实与范围准备 | 工单只保留一份规范副本，视觉事实优先，平台范围不靠关键词误判 | `bug_workflow.py`、`bug_investigator.py` |
 | 源码导航 | Tabby 混合检索、产品/实现层平衡，进入上下文前按当前 checkout 精确验证 | `bug_source_retrieval.py`、`bug_source_view.py` |
-| 历史核验 | 只对已证实的当前入口做一次文件级历史查询，区分“当前仍有故障”与“检出版已修复” | `bug_git_history_runtime.py` |
+| 历史核验 | 仅针对明确回归/版本问题或已知直接变更，在已验证故障入口查询一次 | `bug_git_history_runtime.py` |
 | 单会话调查 | 一次只读 Codex 会话同时完成源码调查和完整四段报告 | `bug_codex_summary.py` |
+| 远端证据接口 | 故障假设门控、八个示例只读工具、嵌入式责任前后一致校验 | `bug_codex_summary.py` |
+| 视觉与日志事实 | 临时无工具视觉提取、流式日志索引、完整/不完整集合明确区分 | `bug_attachment_evidence.py`、`bug_log_query_runtime.py` |
 | 修改建议而非执行 | 校验“主要涉及端”和本地修改范围，不自动改代码 | `bug_change_advice.py` |
 | 写回幂等 | 只写第三、四节；HTML 转义、单次提交、页面优先读回 | `bug_workflow.py`、`zentao_mcp/client.py` |
 | 主助手批处理 | 精确保存 Bug 选择，显式启动持久化后台批次，按顺序执行并支持取消/恢复 | `main_agent_bug_selection.py`、`main_agent_bug_batch.py`、`main_agent_workbench.py` |
 | 日报投影 | 定时报告可选将已分类行按 Bug ID 投影到飞书多维表格，失败不影响文本报告 | `daily_report.py`、`feishu_bug_board.py` |
 | 前端证据视图 | 展示阶段、候选窗口、报告与历史结果；只保留“唯一有效视频附件”的分析/跳过确认 | `frontend/src/app/workspace/bugs/page.tsx`、`video-clarification-card.tsx` |
 
-完整文件定位见 [源码指南](docs/personal/SOURCE_MAP.md)。定制快照列在 [PERSONAL_EXPORT_MANIFEST.json](PERSONAL_EXPORT_MANIFEST.json)：当前收录 109 个新增或修改文件，约 5.9 万行。这里统计的是完整文件总量，包含上游原有内容，不能视为个人新增代码量。
+完整文件定位见 [源码指南](docs/personal/SOURCE_MAP.md)。定制快照列在 [PERSONAL_EXPORT_MANIFEST.json](PERSONAL_EXPORT_MANIFEST.json)：当前收录 109 个新增或修改文件，约 6.0 万行。这里统计的是完整文件总量，包含上游原有内容，不能视为个人新增代码量。
 
 ## 上游与个人贡献边界
 

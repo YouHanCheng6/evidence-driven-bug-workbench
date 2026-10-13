@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from app.gateway.bug_attachment_evidence import MAX_ARCHIVE_MEMBERS, _is_text, _media_type_for_name, _redact_text
-from app.gateway.bug_log_query_runtime import MAX_LOG_SOURCE_BYTES, MAX_LOG_TOTAL_BYTES, read_log_lines, write_log_index
+from app.gateway.bug_log_query_runtime import MAX_COLLECTION_ID_CHARS, MAX_COLLECTION_IDENTIFIERS, MAX_LOG_TOTAL_BYTES, LogIndexWriter, collection_snapshots, iter_log_chunks
 from deerflow.config.app_config import AppConfig
 from deerflow.utils.oneshot_llm import run_oneshot_llm_result
 
@@ -87,6 +87,12 @@ _STATE_TRANSACTION_LIMIT = 4
 _STATE_TRANSACTION_CHAR_BUDGET = 4_000
 _STATE_ALIAS_LABELS = frozenset({"rmac", "hmac", "bmac", "device_id", "device", "sn"})
 _PROPERTY_OBJECT = re.compile(r'\{[^{}\n]{0,800}"pid"\s*:\s*"[^"\n]{1,120}"[^{}\n]{0,800}\}')
+_NUMERIC_COUNT = re.compile(r"(?i)\b(?P<label>[A-Za-z][A-Za-z0-9_\[\] .-]{0,45}(?:count|num|sum|total))\s*[:=]?\s*(?P<count>\d{1,6})\b")
+_REPEATED_RECORD = re.compile(
+    r"(?i)(?P<label>[A-Za-z][\w\[\]-]{0,48})\s*,\s*(?P<index_field>\w*index)\s*(?:[:=]\s*|\s+)(?P<index>\d+)"
+    r"\s*,\s*(?P<id_field>\w*id)\s*(?:[:=]\s*|\s+)(?P<id>[A-Za-z0-9_-]{1,64})"
+)
+_REPEATED_COUNT = re.compile(r"(?i)(?P<label>[A-Za-z][\w\[\]-]{0,48})\s+[^:=\n]{0,40}(?:count|sum|total)\s*[:=]\s*(?P<count>\d+)")
 
 
 def _signal_matcher(signal: str) -> re.Pattern[str]:
@@ -134,17 +140,15 @@ def _identity_links(line: str, identifiers: Sequence[str]) -> list[dict[str, Any
         for child in children:
             found.update(visit(child, depth + 1))
         if found and isinstance(value, Mapping) and len(records) == before:
-            aliases = [alias for key, alias in value.items() if str(key).casefold() in {"uuid", "deviceid", "device_id", "rmac", "hmac", "bmac"}
-                       and isinstance(alias, str) and 8 <= len(alias) <= 128]
+            aliases = [alias for key, alias in value.items() if str(key).casefold() in {"uuid", "deviceid", "device_id", "rmac", "hmac", "bmac"} and isinstance(alias, str) and 8 <= len(alias) <= 128]
             if aliases:
                 for identifier in found:
                     fragments = []
                     for literal in [identifier, *aliases]:
                         offset = line.find(literal)
                         if offset >= 0:
-                            fragments.append(line[max(0, offset - 60):offset + len(literal) + 60])
-                    records.append({"identifier": identifier, "aliases": aliases[:4],
-                                    "quote": _redact_text("\n[同一解析设备对象，省略中间内容]\n".join(fragments))[:1_200]})
+                            fragments.append(line[max(0, offset - 60) : offset + len(literal) + 60])
+                    records.append({"identifier": identifier, "aliases": aliases[:4], "quote": _redact_text("\n[同一解析设备对象，省略中间内容]\n".join(fragments))[:1_200]})
         return found
 
     decoder = json.JSONDecoder()
@@ -239,7 +243,7 @@ def _candidate_fingerprint(quote: str) -> str:
 
 def _candidate_for_prompt(candidate: Mapping[str, Any]) -> dict[str, Any]:
     """Hide duplicated restoration metadata from the model-visible packet."""
-    return {key: value for key, value in candidate.items() if key != "endpoints"}
+    return {key: value for key, value in candidate.items() if key not in {"endpoints", "ids"}}
 
 
 def _parse_log_timestamp(line: str) -> datetime | None:
@@ -412,29 +416,156 @@ def collect_log_material(
 
     def matches_ticket_time(line: str) -> bool:
         return bool(normalized_times) and (not date_hints or any(value in line for value in date_hints)) and (not minute_hints or any(value in line for value in minute_hints))
+
     signal_matchers = [(value, _signal_matcher(value)) for value in normalized_signals]
     raw_candidates: list[dict[str, Any]] = []
     state_events: list[dict[str, Any]] = []
     identity_links: list[dict[str, Any]] = []
     linked_aliases: set[tuple[str, str]] = set()
+    collection_observations: dict[tuple[str, str], dict[str, dict[str, Any]]] = {}
+    record_groups: dict[str, dict[str, Any]] = {}
     files_searched = 0
     diagnostics: list[dict[str, Any]] = []
-    indexed_sources: list[tuple[str, list[str]]] = []
     bytes_read = 0
+    index_writer: LogIndexWriter | None = None
+    index_failed = False
+    if index_path is not None:
+        try:
+            index_writer = LogIndexWriter(index_path, _redact_text)
+        except Exception:
+            index_failed = True
 
-    def collect(source: str, lines: list[str]) -> None:
-        nonlocal files_searched
-        files_searched += 1
+    def keep_collection(source: str, field: str, item: dict[str, Any], count: int) -> None:
+        key = (source, field.casefold())
+        if key not in collection_observations and len(collection_observations) >= 128:
+            return
+        observations = collection_observations.setdefault(key, {})
+        if "max" not in observations or count > observations["max"]["count"]:
+            observations["max"] = {**item, "count": count}
+        observations["latest"] = {**item, "count": count}
+
+    def finish_record_group(source: str, *, declared_count: int | None = None, end_line: int | None = None) -> None:
+        group = record_groups.pop(source, None)
+        if not group or group["observed"] < 2:
+            return
+        records = group["records"]
+        identifiers = [record["id"] for record in records]
+        complete = (
+            declared_count == group["observed"]
+            and group["observed"] <= MAX_COLLECTION_IDENTIFIERS
+            and group["last_index"] == group["first_index"] + group["observed"] - 1
+            and len(set(identifiers)) == len(records)
+            and len(json.dumps(identifiers, ensure_ascii=False)) <= MAX_COLLECTION_ID_CHARS
+        )
+        if group["observed"] > MAX_COLLECTION_IDENTIFIERS or len(json.dumps(identifiers, ensure_ascii=False)) > MAX_COLLECTION_ID_CHARS:
+            identifiers = []
+        label = group["label"]
+        id_field = group["id_field"]
+        count = declared_count if declared_count is not None else group["observed"]
+        quote = (
+            f"[连续原始记录的集合快照] {label} count={count} observed={group['observed']} "
+            f"{id_field}={json.dumps(identifiers, ensure_ascii=False)} complete={str(complete).lower()}\n"
+            f"[首条] {group['first_quote']}\n[末条] {group['last_quote']}"
+        )
+        item = {
+            "kind": "collection_snapshot",
+            "source": source,
+            "line_start": group["line_start"],
+            "line_end": end_line or group["last_line"],
+            "reasons": ["runtime_structure", "structured_collection_members"],
+            "quote": _redact_text(quote),
+            "field": label,
+            "id_field": id_field,
+            "ids": identifiers,
+            "complete": complete,
+            "_priority": 430 + min(count, 100) + (150 if complete else 0),
+            "_source_order": files_searched,
+        }
+        keep_collection(source, label, item, count)
+
+    def collect(source: str, lines: list[str], first_line: int) -> None:
         hits: list[tuple[int, int, list[str]]] = []
         property_states: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
         for index, line in enumerate(lines):
+            line_number = first_line + index
+            record = _REPEATED_RECORD.search(line)
+            group = record_groups.get(source)
+            completed_record_count = False
+            if record is not None:
+                label, id_field = record.group("label", "id_field")
+                record_index = int(record.group("index"))
+                if group and (group["label"] != label or group["id_field"] != id_field or record_index != group["last_index"] + 1):
+                    finish_record_group(source)
+                    group = None
+                if group is None:
+                    group = {
+                        "label": label,
+                        "id_field": id_field,
+                        "line_start": line_number,
+                        "first_quote": line,
+                        "records": [],
+                        "first_index": record_index,
+                        "last_index": record_index - 1,
+                        "last_line": line_number,
+                        "last_quote": line,
+                        "observed": 0,
+                    }
+                    record_groups[source] = group
+                group["last_index"] = record_index
+                group["last_line"] = line_number
+                group["last_quote"] = line
+                group["observed"] += 1
+                if len(group["records"]) < MAX_COLLECTION_IDENTIFIERS:
+                    identifier = record.group("id")
+                    group["records"].append({"id": int(identifier) if identifier.isdigit() else identifier})
+            elif group:
+                marker = _REPEATED_COUNT.search(line)
+                completed_record_count = bool(marker and marker.group("label") == group["label"])
+                finish_record_group(
+                    source,
+                    declared_count=int(marker.group("count")) if completed_record_count else None,
+                    end_line=line_number if completed_record_count else None,
+                )
+            snapshots = collection_snapshots(line)
+            for field, snapshot in snapshots.items():
+                count = snapshot["count"]
+                details = f" {snapshot['id_field']}={json.dumps(snapshot['ids'], ensure_ascii=False)} complete=true" if snapshot["complete"] else " 成员未完整提取"
+                item = {
+                    "source": source,
+                    "line_start": first_line + index,
+                    "line_end": first_line + index,
+                    "quote": _redact_text(line[:180]) + f"\n[同一 JSON 对象的数组快照] {field}={count}{details}",
+                    "reasons": ["runtime_structure", "structured_collection_members"],
+                    "kind": "collection_snapshot",
+                    "field": field,
+                    "id_field": snapshot["id_field"],
+                    "ids": snapshot["ids"],
+                    "complete": snapshot["complete"],
+                    "_priority": 430 + min(count, 100) + (150 if snapshot["complete"] else 0),
+                    "_source_order": files_searched,
+                }
+                keep_collection(source, field, item, count)
+            if not snapshots and not completed_record_count and len(line) < 4_000:
+                match = _NUMERIC_COUNT.search(line)
+                if match is not None:
+                    field, count = match.group("label").strip(), int(match.group("count"))
+                    item = {
+                        "source": source,
+                        "line_start": first_line + index,
+                        "line_end": first_line + index,
+                        "quote": _redact_text(line[:400]),
+                        "reasons": ["runtime_structure", "numeric_count"],
+                        "_priority": 230 + min(count, 100),
+                        "_source_order": files_searched,
+                    }
+                    keep_collection(source, field, item, count)
             if len(identity_links) < 8:
                 for link in _identity_links(line, identity_signals):
                     identity = (link["identifier"], "|".join(link["aliases"]))
                     if identity not in linked_aliases:
-                        identity_links.append({**link, "source": source, "line_start": index + 1, "line_end": index + 1})
+                        identity_links.append({**link, "source": source, "line_start": first_line + index, "line_end": first_line + index})
                         linked_aliases.add(identity)
-            event = _state_event(source, index + 1, line)
+            event = _state_event(source, first_line + index, line)
             if event is not None:
                 state_events.append(event)
             # Preserve actual property objects even when deep inside a long
@@ -457,9 +588,15 @@ def collect_log_material(
                     rows = property_states[pid]
                     quote = _redact_text(line[:250] + "\n[属性原文，省略中间内容]\n" + match.group(0) + "\n[行尾原文]\n" + line[-180:])[:1_400]
                     matched = [signal for signal, matcher in signal_matchers if matcher.search(pid)]
-                    item = {"source": source, "line_start": index + 1, "line_end": index + 1, "quote": quote,
-                            "reasons": ["runtime_structure", "property_state", *(["ticket_time"] if normalized_times else []), *[f"signal:{signal}" for signal in matched]],
-                            "_priority": 200 + (300 if matched else 0), "_source_order": files_searched}
+                    item = {
+                        "source": source,
+                        "line_start": first_line + index,
+                        "line_end": first_line + index,
+                        "quote": quote,
+                        "reasons": ["runtime_structure", "property_state", *(["ticket_time"] if normalized_times else []), *[f"signal:{signal}" for signal in matched]],
+                        "_priority": 200 + (300 if matched else 0),
+                        "_source_order": files_searched,
+                    }
                     if state in rows or len(rows) < 4:
                         rows.setdefault(state, item)
                         rows["latest"] = item
@@ -496,8 +633,8 @@ def collect_log_material(
             source_candidates.append(
                 {
                     "source": source,
-                    "line_start": start + 1,
-                    "line_end": end,
+                    "line_start": first_line + start,
+                    "line_end": first_line + end - 1,
                     "reasons": reasons,
                     "quote": quote[:2_400],
                     **({"transaction_keys": transaction_keys} if transaction_keys else {}),
@@ -525,17 +662,31 @@ def collect_log_material(
         raw_candidates.extend(_coverage_order(runtime_candidates, limit=24))
 
     def scan(source: str, stream: Any) -> None:
-        nonlocal bytes_read
-        remaining = MAX_LOG_TOTAL_BYTES - bytes_read
-        if remaining <= 0:
-            diagnostics.append({"source": source, "status": "skipped", "reason": "total_byte_limit"})
+        nonlocal bytes_read, files_searched, index_writer, index_failed
+        if bytes_read >= MAX_LOG_TOTAL_BYTES:
+            diagnostics.append({"source": source, "status": "skipped", "reason": "expanded_archive_safety_limit"})
             return
-        lines, limits = read_log_lines(stream, min(MAX_LOG_SOURCE_BYTES, remaining))
-        bytes_read += int(limits["bytes_read"])
-        diagnostics.append({"source": source, "status": "partial" if limits["truncated"] or limits["oversized_lines"] else "scanned", **limits})
-        collect(source, lines)
-        if index_path is not None:
-            indexed_sources.append((source, lines))
+        files_searched += 1
+        source_bytes = 0
+        oversized_lines = 0
+        truncated = False
+        for first_line, lines, chunk_bytes, chunk_oversized in iter_log_chunks(stream):
+            bytes_read += chunk_bytes
+            source_bytes += chunk_bytes
+            oversized_lines += chunk_oversized
+            collect(source, lines, first_line)
+            if index_writer is not None:
+                try:
+                    index_writer.add(source, first_line, lines)
+                except Exception:
+                    index_writer.abort()
+                    index_writer = None
+                    index_failed = True
+            if bytes_read >= MAX_LOG_TOTAL_BYTES:
+                truncated = bool(stream.read(1))
+                break
+        finish_record_group(source)
+        diagnostics.append({"source": source, "status": "partial" if truncated or oversized_lines else "scanned", "bytes_read": source_bytes, "oversized_lines": oversized_lines, "truncated": truncated})
 
     for name in _indexed_asset_names(attachment_evidence):
         path = uploads_dir / Path(name).name
@@ -567,24 +718,33 @@ def collect_log_material(
                 diagnostics.append({"source": name, "status": "failed", "reason": "attachment_missing"})
         except (OSError, RuntimeError, zipfile.BadZipFile, KeyError, EOFError):
             diagnostics.append({"source": name, "status": "failed", "reason": "archive_or_attachment_read_failed"})
-    index_status = "not_requested"
-    if index_path is not None and files_searched:
+    index_status = "failed" if index_failed else "not_requested"
+    if index_writer is not None and files_searched:
         try:
-            write_log_index(index_path, indexed_sources, diagnostics, _redact_text, normalized_times)
+            index_writer.finish(diagnostics, normalized_times)
             index_status = "ready"
         except Exception:
-            # Optional acceleration cannot block analysis or lose the excerpts.
+            index_writer.abort()
             index_status = "failed"
+    elif index_writer is not None:
+        index_writer.abort()
+
+    for observations in collection_observations.values():
+        for item in {int(value["line_start"]): value for value in observations.values()}.values():
+            raw_candidates.append({key: value for key, value in item.items() if key != "count"})
 
     signal_candidates = [item for item in raw_candidates if any(str(reason).startswith("signal:") for reason in item["reasons"])]
     time_candidates = [item for item in raw_candidates if "ticket_time" in item["reasons"] and item not in signal_candidates]
-    runtime_candidates = [item for item in raw_candidates if item not in signal_candidates and item not in time_candidates]
+    collection_candidates = sorted(
+        (item for item in raw_candidates if item.get("kind") == "collection_snapshot" or "numeric_count" in item["reasons"]),
+        key=lambda item: -int(item["_priority"]),
+    )
+    runtime_candidates = [item for item in raw_candidates if item not in signal_candidates and item not in time_candidates and item not in collection_candidates]
     # Strong identifiers must not consume the entire packet before time/state
     # evidence gets a slot. All categories retain fair per-source ordering.
-    ordered = [item for row in zip_longest(_round_robin_sources(signal_candidates),
-                                          _round_robin_sources(time_candidates),
-                                          _round_robin_sources(runtime_candidates))
-               for item in row if item is not None]
+    ordered = [
+        item for row in zip_longest(_round_robin_sources(signal_candidates), _round_robin_sources(time_candidates), _round_robin_sources(collection_candidates), _round_robin_sources(runtime_candidates)) for item in row if item is not None
+    ]
 
     candidates: list[dict[str, Any]] = []
     used_chars = 0
@@ -752,6 +912,8 @@ async def run_log_expert(
             "如果你在 unproven 中仍需确认该日志是否与本 Bug、同一操作或同一页面直接相关，就必须标为 supporting 或 reject，不能标为 direct。",
             "supporting 只作背景；reject 表示无关。优先覆盖触发、传递、失败和消费者等不同因果角色，不要选择重复背景流量。",
             "状态同步问题应保留同一对象、同一属性在设备返回、上传、云端读取、缓存中的一致或冲突值及时间顺序，不得只挑一条正常返回。上传请求不等于成功，接口成功码不等于字段满足预期。跨拼写字段只作候选，协议或源码核实后才认定同义。",
+            "集合快照的 count 与成员 ID 来自同一原始列表或连续记录；只有 complete=true 才能把成员视为完整集合。若同一设备、相近时间的两端数量冲突，优先合并选择两端快照；ID 字段跨端是否同义仍需核实，不得只凭数量或相似字段名断定因果。",
+            "只陈述日志里的实际数量；没有明确的容量阈值证据时，不得把 count 写成已满、未满或达到/未达到上限。",
             "kind=state_transaction 的候选由后端从同一对象的两个精确状态端点确定性生成；duration_ms 只证明该状态区间长度，不证明结束原因。",
             "不要判断最终根因、责任仓库、Native/RN、修复范围或 target。必须明确已证明与尚未证明的边界。",
             '只输出 JSON：{"evidence":[{"candidate_ids":["L1"],"relevance":"direct|supporting|reject","summary":"一句话","proven":"日志直接证明的事实","unproven":"仍需源码验证的内容"}]}。',

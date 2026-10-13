@@ -64,11 +64,11 @@ class BugAnalysisSummaryConfig(BaseModel):
         default="~/.codex-deerflow/source-views",
         description="Gateway-host source-only views used by Codex investigations.",
     )
-    investigation_reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh", "max", "ultra"] = Field(
-        default="medium", description="Reasoning effort for a full read-only Codex investigation."
-    )
+    investigation_reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh", "max", "ultra"] = Field(default="medium", description="Reasoning effort for a full read-only Codex investigation.")
     investigation_timeout_seconds: float = Field(
-        default=3600.0, gt=0, le=7200,
+        default=3600.0,
+        gt=0,
+        le=7200,
         description="Whole-ticket wall-clock limit for one Codex investigation and its final report.",
     )
 
@@ -98,6 +98,16 @@ class BugLogExpertConfig(BaseModel):
     thinking_enabled: bool = False
 
 
+class BugVisualEvidenceConfig(BaseModel):
+    """Isolated no-tools Codex call used only to transcribe screenshot facts."""
+
+    model_name: str = Field(default="gpt-6-luna", description="Codex vision model for Bug attachment fact extraction.")
+    reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh", "max"] = Field(
+        default="medium",
+        description="Reasoning effort for the isolated visual extraction turn.",
+    )
+
+
 class BugAnalysisConfig(BaseModel):
     """Configuration for the single Bug Workbench investigation path."""
 
@@ -106,4 +116,5 @@ class BugAnalysisConfig(BaseModel):
     source_retrieval: BugSourceRetrievalConfig = Field(default_factory=BugSourceRetrievalConfig)
     platform: BugPlatformResolutionConfig = Field(default_factory=BugPlatformResolutionConfig)
     log_expert: BugLogExpertConfig = Field(default_factory=BugLogExpertConfig)
+    visual: BugVisualEvidenceConfig = Field(default_factory=BugVisualEvidenceConfig)
     summary: BugAnalysisSummaryConfig = Field(default_factory=BugAnalysisSummaryConfig)

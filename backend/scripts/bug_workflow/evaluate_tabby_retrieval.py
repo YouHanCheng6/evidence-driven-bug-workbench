@@ -103,6 +103,7 @@ async def main_async() -> int:
     parser.add_argument("--api-key-file", type=Path, default=Path(".deer-flow/tabby/admin-access-token"))
     parser.add_argument("--refresh-token-file", type=Path, default=Path(".deer-flow/tabby/admin-refresh-token"))
     parser.add_argument("--limit", type=int, default=10)
+    parser.add_argument("--cases-file", type=Path, help="Replay frozen case inputs instead of selecting newer workflows.")
     parser.add_argument(
         "--bug-id",
         action="append",
@@ -111,8 +112,8 @@ async def main_async() -> int:
         help="Evaluate only this persisted Bug id; repeat for multiple ids.",
     )
     parser.add_argument("--output", type=Path, default=Path(".deer-flow/audits/tabby-historical-retrieval.json"))
-    parser.add_argument("--sample_mobile_repo", type=Path, default=Path("/home/example_user Workbench/projects/sample_mobile_repo"))
-    parser.add_argument("--harmony-rn", type=Path, default=Path("/home/example_user Workbench/sample_platform_repo"))
+    parser.add_argument("--sample_mobile_repo", type=Path, default=Path("/home/example_user/projects/sample_mobile_repo"))
+    parser.add_argument("--sample-platform-repo", type=Path, default=Path("/home/example_user/sample_platform_repo"))
     parser.add_argument("--index-root", type=Path, default=Path(".deer-flow/tabby/composite-repositories"))
     args = parser.parse_args()
 
@@ -143,10 +144,14 @@ async def main_async() -> int:
     )
     results: list[dict[str, Any]] = []
     selected_bug_ids = set(args.bug_id)
-    raw_cases = _historical_cases(
-        args.database,
-        limit=max(1, args.limit) * 5,
-        bug_ids=selected_bug_ids or None,
+    raw_cases = (
+        json.loads(args.cases_file.read_text(encoding="utf-8"))
+        if args.cases_file
+        else _historical_cases(
+            args.database,
+            limit=max(1, args.limit) * 5,
+            bug_ids=selected_bug_ids or None,
+        )
     )
     for case in raw_cases:
         case["reference_paths"] = [path for path in case["reference_paths"] if (roots[case["repository"]] / path).is_file()]
@@ -182,6 +187,7 @@ async def main_async() -> int:
                 "rejections": packet.get("rejections"),
             }
         )
+        print(json.dumps({"bug_id": case["bug_id"], "status": packet.get("status"), "overlap": overlap}, ensure_ascii=False), flush=True)
         if len(results) >= (len(selected_bug_ids) if selected_bug_ids else max(1, args.limit)):
             break
     ready = sum(item["status"] == "ready" for item in results)

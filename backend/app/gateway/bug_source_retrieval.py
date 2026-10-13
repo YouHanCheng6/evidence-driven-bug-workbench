@@ -120,8 +120,47 @@ _EXPLICIT_PATH_PRODUCT = re.compile(
 )
 _SOURCE_SUFFIXES = frozenset({".java", ".kt", ".m", ".mm", ".swift", ".js", ".jsx", ".ts", ".tsx"})
 _RESOURCE_SUFFIXES = frozenset({".strings", ".xml", ".json"})
-_RESOURCE_PATH_PARTS = frozenset({"assets", "images", "lang", "locales", "resources", "res"})
+_RESOURCE_PATH_PARTS = frozenset({"assets", "images", "lang", "langs", "locales", "resources", "res"})
 _IMPLEMENTATION_LAYERS = frozenset({"android_native", "ios_native", "shared_rn", "harmony_native", "sample_platform_repo"})
+
+# Small, repository-independent translations from user-visible behavior to
+# common source responsibilities.  These are programming concepts, not product
+# or Bug mappings; the ticket facts remain the source of the business nouns.
+_CODE_DUTY_HINTS = (
+    (("海外", "美国", "地区", "国家"), "Sea overseas country region"),
+    (("注册",), "register signup"),
+    (("编辑",), "edit editing selected"),
+    (("日期",), "date header section"),
+    (("门铃",), "doorbell ring event"),
+    (("标签", "文案", "不一致"), "label title description mapping resource"),
+    (("钥匙",), "key keyId key management"),
+    (("密码",), "password pwd"),
+    (("长按",), "long press onLongPress gesture disabled"),
+    (("置灰", "灰色", "不可用"), "disabled enabled interaction state"),
+    (("批量",), "batch selected list"),
+    (("删除",), "delete remove callback"),
+    (("取消",), "cancel abort cleanup reset"),
+    (("断网", "无网络", "网络异常"), "network error failure callback"),
+    (("无提示", "提示", "toast"), "toast error message callback"),
+    (("进入", "打开"), "page entry initialize load fetch"),
+    (("计时", "时长"), "timer duration format hour minute second"),
+    (("崩溃", "闪退"), "lifecycle cleanup callback crash"),
+)
+_CODE_ACTION_WORDS = {
+    "删除": ("delete", "remove"),
+    "取消": ("cancel", "reset"),
+    "开锁": ("unlock",),
+    "下载": ("download",),
+    "录屏": ("record",),
+}
+_CODE_ENTITY_WORDS = {
+    "钥匙": ("key",),
+    "密码": ("pwd", "password"),
+    "按钮": ("button",),
+    "视频": ("video",),
+    "任务": ("task",),
+    "设备": ("device",),
+}
 
 
 def _revision(root: Path) -> str:
@@ -198,12 +237,6 @@ def build_retrieval_query(
         "event_or_actions",
     ):
         add(160, list(_iter_api_paths(query_facts.get(key))))
-    log_evidence = runtime_evidence.get("log_evidence")
-    if isinstance(log_evidence, Mapping):
-        for item in log_evidence.get("accepted_evidence", []) if isinstance(log_evidence.get("accepted_evidence"), Sequence) else ():
-            if isinstance(item, Mapping):
-                add(160, list(_iter_api_paths(item.get("summary"))))
-
     add(140, retrieval_aliases)
     # The ticket states the behavior being investigated. Keep that semantic
     # center ahead of visual scene descriptions, which usually describe where
@@ -215,13 +248,6 @@ def build_retrieval_query(
     for key in ("pages_or_regions", "user_paths", "visible_controls", "event_or_actions"):
         add(55, list(_iter_text(query_facts.get(key)))[:2])
 
-    log_evidence = runtime_evidence.get("log_evidence")
-    if isinstance(log_evidence, Mapping):
-        for item in log_evidence.get("accepted_evidence", []) if isinstance(log_evidence.get("accepted_evidence"), Sequence) else ():
-            if isinstance(item, Mapping):
-                add(110, item.get("summary"))
-                add(105, item.get("sources"))
-
     parts: list[str] = []
     used = 0
     for _score, text in sorted(ranked, key=lambda item: (-item[0], len(item[1]), item[1])):
@@ -229,6 +255,129 @@ def build_retrieval_query(
         if used + cost > max_chars:
             continue
         parts.append(text)
+        used += cost
+    return "\n".join(parts)
+
+
+def build_code_duty_query(
+    *,
+    bug_snapshot: Mapping[str, Any],
+    query_facts: Mapping[str, Any],
+    max_chars: int = 640,
+) -> str:
+    """Build a compact behavior-to-source query alongside the literal query.
+
+    The literal query preserves exact copy, identifiers and ticket wording.
+    This second view keeps only page/action/state/expectation facts and adds a
+    bounded set of generic programming concepts.  It never names a product
+    file, class, module or Bug-specific destination.
+    """
+    duty_triggers = tuple(trigger for triggers, _hint in _CODE_DUTY_HINTS for trigger in triggers)
+    action_triggers = ("点击", "长按", "进入", "打开", "返回", "选择", "开启", "关闭", "添加", "删除", "取消", "播放", "录制", "开锁")
+
+    def fragments(value: Any) -> list[str]:
+        candidates: list[str] = []
+        for raw in _iter_text(value):
+            cleaned = _FACT_LABEL.sub("|", re.sub(r"\s+", " ", raw))
+            for fragment in re.split(r"[|\[\]【】；;。\n]|(?:^|\s)\d+[.、)）]", cleaned):
+                text = fragment.strip(" \t\r\n，。；：、|[]【】")
+                if 2 <= len(text) <= 80 and text not in candidates and not re.fullmatch(r"(?:必现|偶现|问题恢复|复现概率|时间|见视频|预置条件|无)", text) and not re.fullmatch(r"[\d\s:：./-]+", text):
+                    candidates.append(text)
+        return sorted(
+            dict.fromkeys(candidates),
+            key=lambda text: (
+                -int(any(trigger in text for trigger in duty_triggers)),
+                -int(any(trigger in text for trigger in action_triggers)),
+                -int(bool(re.search(r"(?:页|界面|列表|按钮|管理|设置|功能)", text))),
+                len(text),
+                text,
+            ),
+        )
+
+    parts: list[str] = []
+    seen: set[str] = set()
+    used = 0
+
+    def add(value: Any, *, limit: int) -> None:
+        nonlocal used
+        added = 0
+        for text in fragments(value):
+            folded = text.casefold()
+            if len(text) < 2 or folded in seen or folded in _GENERIC_TERMS or _NOISY_IDENTIFIER.fullmatch(text):
+                continue
+            cost = len(text) + (1 if parts else 0)
+            if used + cost > max_chars:
+                continue
+            parts.append(text)
+            seen.add(folded)
+            used += cost
+            added += 1
+            if added >= limit:
+                break
+
+    add(bug_snapshot.get("title"), limit=1)
+    add(query_facts.get("pages_or_regions"), limit=1)
+    add(query_facts.get("entry_actions") or query_facts.get("event_or_actions"), limit=1)
+    hint_corpus = "\n".join(
+        _iter_text(
+            (
+                query_facts.get("entry_actions"),
+                query_facts.get("actual_texts"),
+                query_facts.get("expected_texts"),
+                bug_snapshot.get("title"),
+            )
+        )
+    )
+    hint_corpus = re.sub(r"(?:见|查看)?(?:附件)?(?:视频|截图)", " ", hint_corpus)
+    hints = [hint for triggers, hint in _CODE_DUTY_HINTS if any(trigger.casefold() in hint_corpus.casefold() for trigger in triggers)]
+    composed = [
+        f"{verb}{entity[:1].upper()}{entity[1:]}" for action, verbs in _CODE_ACTION_WORDS.items() if action in hint_corpus for noun, entities in _CODE_ENTITY_WORDS.items() if noun in hint_corpus for verb in verbs for entity in entities
+    ][:8]
+    if composed:
+        add(composed, limit=8)
+    if hints:
+        add(hints, limit=5)
+    return "\n".join(parts)
+
+
+def _code_duty_anchor_terms(*, bug_snapshot: Mapping[str, Any], query_facts: Mapping[str, Any]) -> list[str]:
+    """Translate visible behavior into bounded, repository-independent code terms."""
+    corpus = "\n".join(
+        _iter_text(
+            (
+                bug_snapshot.get("title"),
+                query_facts.get("pages_or_regions"),
+                query_facts.get("entry_actions"),
+                query_facts.get("actual_texts"),
+                query_facts.get("expected_texts"),
+            )
+        )
+    ).casefold()
+    terms: list[str] = []
+    for triggers, hint in _CODE_DUTY_HINTS:
+        if not any(trigger.casefold() in corpus for trigger in triggers):
+            continue
+        for term in hint.split():
+            if len(term) >= 3 and term.casefold() not in {value.casefold() for value in terms}:
+                terms.append(term)
+    return terms[:12]
+
+
+def _enrich_query_with_navigation(query: str, terms: Sequence[str], *, max_chars: int) -> str:
+    """Append only current-checkout navigation identities to Tabby's query."""
+    parts = query.splitlines()
+    seen = {part.casefold() for part in parts}
+    used = len(query)
+    for value in terms:
+        text = re.sub(r"\s+", " ", str(value or "")).strip(" \t\r\n，。；：、|[]【】")
+        folded = text.casefold()
+        if len(text) < 2 or len(text) > 80 or folded in seen or folded in _GENERIC_TERMS:
+            continue
+        cost = len(text) + (1 if parts else 0)
+        if used + cost > max_chars:
+            continue
+        parts.append(text)
+        seen.add(folded)
         used += cost
     return "\n".join(parts)
 
@@ -552,6 +701,59 @@ def _module_config_bindings(root: Path) -> dict[str, str]:
     return bindings
 
 
+def _resolve_relative_source(root: Path, owner: Path, import_path: str) -> Path | None:
+    """Resolve one checkout-local JS/TS import without a package resolver."""
+    if not import_path.startswith("."):
+        return None
+    unresolved = (owner.parent / import_path).resolve(strict=False)
+    candidates = [
+        unresolved,
+        *(unresolved.with_suffix(suffix) for suffix in (".js", ".jsx", ".ts", ".tsx")),
+        *(unresolved / f"index{suffix}" for suffix in (".js", ".jsx", ".ts", ".tsx")),
+    ]
+    for candidate in candidates:
+        if candidate.is_relative_to(root) and candidate.is_file():
+            return candidate
+    return None
+
+
+def _runtime_route_bindings(root: Path, runtime_config: Path, source: str) -> list[dict[str, Any]]:
+    """Read route-name -> actual component bindings from one product config."""
+    imports: dict[str, Path] = {}
+    for match in re.finditer(
+        r"^\s*import\s+(?P<symbol>[A-Za-z_$][\w$]*)\s+from\s+['\"](?P<path>[^'\"]+)['\"]\s*;?",
+        source,
+        re.MULTILINE,
+    ):
+        target = _resolve_relative_source(root, runtime_config, match.group("path"))
+        if target is not None:
+            imports[match.group("symbol")] = target
+
+    bindings: list[dict[str, Any]] = []
+    route = re.compile(
+        r"\bname\s*:\s*['\"](?P<name>[^'\"]+)['\"]\s*,"
+        r"(?P<body>[^{}]{0,600}?)\bcomponent\s*:\s*(?P<component>[A-Za-z_$][\w$]*)"
+        r"(?P<tail>[^{}]{0,300})",
+        re.DOTALL,
+    )
+    for match in route.finditer(source):
+        component = match.group("component")
+        target = imports.get(component)
+        if target is None:
+            continue
+        title_match = re.search(r"\btitle\s*:\s*['\"](?P<title>[^'\"]+)['\"]", match.group("tail"))
+        bindings.append(
+            {
+                "name": match.group("name"),
+                "component": component,
+                "implementation_path": target.relative_to(root).as_posix(),
+                "line": source[: match.start()].count("\n") + 1,
+                "title": title_match.group("title") if title_match else "",
+            }
+        )
+    return bindings
+
+
 def _runtime_config_for_model(root: Path, model: str) -> dict[str, Any] | None:
     """Follow the checkout's model-to-runtime-config import, when present."""
     loader = root / "modules" / "config" / "Config.js"
@@ -559,9 +761,7 @@ def _runtime_config_for_model(root: Path, model: str) -> dict[str, Any] | None:
         lines = loader.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return None
-    binding = re.compile(
-        r"^\s*['\"](?P<model>[^'\"]+)['\"]\s*:\s*.*?\bimport\(\s*['\"](?P<path>\.[^'\"]+\.js)['\"]\s*\)"
-    )
+    binding = re.compile(r"^\s*['\"](?P<model>[^'\"]+)['\"]\s*:\s*.*?\bimport\(\s*['\"](?P<path>\.[^'\"]+\.js)['\"]\s*\)")
     for line_number, line in enumerate(lines, start=1):
         match = binding.search(line)
         if not match or match.group("model") != model:
@@ -571,9 +771,10 @@ def _runtime_config_for_model(root: Path, model: str) -> dict[str, Any] | None:
             return None
         assignments: list[dict[str, Any]] = []
         try:
-            target_lines = target.read_text(encoding="utf-8", errors="replace").splitlines()
+            target_source = target.read_text(encoding="utf-8", errors="replace")
         except OSError:
             return None
+        target_lines = target_source.splitlines()
         for index, source_line in enumerate(target_lines, start=1):
             if not re.match(r"^\s*[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+\s*=(?!=)", source_line):
                 continue
@@ -585,8 +786,229 @@ def _runtime_config_for_model(root: Path, model: str) -> dict[str, Any] | None:
             "mapping_line": line_number,
             "path": target.relative_to(root).as_posix(),
             "assignment_clues": assignments,
+            "route_bindings": _runtime_route_bindings(root, target, target_source),
         }
     return None
+
+
+def _module_config_overrides(payload: Mapping[str, Any]) -> dict[str, str]:
+    """Read logical-page -> concrete-component bindings from module config."""
+    overrides: dict[str, str] = {}
+    modules = payload.get("modules")
+    if not isinstance(modules, Sequence) or isinstance(modules, (str, bytes, bytearray)):
+        return overrides
+    for module in modules:
+        if not isinstance(module, Mapping):
+            continue
+        config_infos = module.get("examplePageConfig")
+        if not isinstance(config_infos, Sequence) or isinstance(config_infos, (str, bytes, bytearray)):
+            continue
+        for config_info in config_infos:
+            data = config_info.get("data") if isinstance(config_info, Mapping) else None
+            if not isinstance(data, Mapping):
+                continue
+            for logical, concrete in data.items():
+                logical_name = str(logical or "").strip()
+                concrete_name = str(concrete or "").strip()
+                if re.fullmatch(r"[A-Za-z_$][\w$]*", logical_name) and re.fullmatch(r"[A-Za-z_$][\w$]*", concrete_name):
+                    overrides[logical_name] = concrete_name
+    return overrides
+
+
+def _module_config_signature(root: Path, *, model: str, payload: Mapping[str, Any]) -> tuple[Any, ...]:
+    """Return only current-runtime facts that must agree for family consensus."""
+    modules = payload.get("modules")
+    module_names = (
+        tuple(sorted(str(module.get("name") or "") for module in modules if isinstance(module, Mapping) and str(module.get("name") or "").strip()))
+        if isinstance(modules, Sequence) and not isinstance(modules, (str, bytes, bytearray))
+        else ()
+    )
+    runtime = _runtime_config_for_model(root, model)
+    return (
+        module_names,
+        tuple(sorted(_module_config_overrides(payload).items())),
+        str((runtime or {}).get("path") or ""),
+    )
+
+
+def _localized_resource_values(root: Path) -> dict[str, tuple[str, frozenset[str]]]:
+    """Read bounded Simplified-Chinese resource dictionaries across client layers."""
+    values: dict[str, tuple[str, set[str]]] = {}
+
+    def add_value(key: str, value: str, layer: str) -> None:
+        existing = values.get(key)
+        if existing is None:
+            values[key] = (value, {layer})
+        elif existing[0] == value:
+            existing[1].add(layer)
+
+    for relative in (
+        "modules/resources/lang/zh.json",
+        "modules/resources/lang/zh-CN.json",
+        "modules/resources/lang/zh_CN.json",
+    ):
+        path = root / relative
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(payload, Mapping):
+            for key, value in payload.items():
+                if isinstance(value, str):
+                    add_value(str(key), value, "shared_rn")
+            break
+
+    for path in sorted((root / "ios").glob("**/zh-Hans.lproj/Localizable.strings"))[:8]:
+        try:
+            source = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for match in re.finditer(r'^\s*"(?P<key>[^"\\]+)"\s*=\s*"(?P<value>(?:\\.|[^"\\])*)"\s*;', source, re.MULTILINE):
+            add_value(match.group("key"), match.group("value").replace(r"\"", '"').replace(r"\n", "\n"), "ios_native")
+
+    for path in sorted((root / "android").glob("**/values-zh*/strings.xml"))[:12]:
+        try:
+            source = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for match in re.finditer(r'<string\s+name=["\'](?P<key>[^"\']+)["\'][^>]*>(?P<value>.*?)</string>', source, re.DOTALL):
+            value = re.sub(r"<[^>]+>", "", match.group("value")).strip()
+            if value:
+                add_value(match.group("key"), value, "android_native")
+    return {key: (value, frozenset(layers)) for key, (value, layers) in values.items()}
+
+
+def _ticket_resource_navigation(root: Path, *, bug_snapshot: Mapping[str, Any], query_facts: Mapping[str, Any]) -> list[str]:
+    """Bridge ticket-visible copy to current-checkout resource keys, without choosing a model."""
+    corpus = build_module_intent_query(bug_snapshot=bug_snapshot, query_facts=query_facts)
+    navigation_corpus = "\n".join(
+        _iter_text(
+            (
+                bug_snapshot.get("title"),
+                query_facts.get("entry_actions"),
+                query_facts.get("pages_or_regions"),
+                query_facts.get("visible_controls"),
+            )
+        )
+    )
+    requested_layers = set(_requested_implementation_layers(query_facts))
+    matches = [
+        (int(bool(layers & requested_layers)), int(value in navigation_corpus), len(value), value, key)
+        for key, (value, layers) in _localized_resource_values(root).items()
+        if 2 <= len(value) <= 40 and value in corpus and not value.isdigit() and value.casefold() not in _CONCEPT_STOPWORDS and re.fullmatch(r"[A-Za-z_$][\w$]*", key)
+    ]
+    matches.sort(key=lambda item: (-item[0], -item[1], -item[2], item[3], item[4]))
+    # Different keys for the same visible text are one navigation concept.
+    # Cover distinct controls/values before spending slots on their aliases.
+    value_groups: dict[str, list[str]] = {}
+    for _layer, _navigation, _length, value, key in matches:
+        value_groups.setdefault(value, []).append(key)
+    return _allocate_anchor_queries(groups=list(value_groups.values()), limit=4)
+
+
+def _module_source_navigation(
+    *,
+    root: Path,
+    module_name: str,
+    module_overrides: Mapping[str, str],
+    runtime_config: Mapping[str, Any] | None,
+    implementation_index: Mapping[str, Sequence[str]],
+    fallback_paths: Sequence[str],
+    resources: Mapping[str, str],
+    intent_concepts: Sequence[str],
+) -> tuple[list[str], list[str], list[dict[str, str]]]:
+    """Resolve the product-bound component and its direct page transitions."""
+    terms: list[str] = []
+    paths: list[str] = []
+    relations: list[dict[str, str]] = []
+
+    def add_term(value: Any) -> None:
+        text = str(value or "").strip()
+        if len(text) >= 2 and text not in terms:
+            terms.append(text)
+
+    def add_path(value: Any) -> None:
+        relative = str(value or "").strip()
+        if relative and (root / relative).is_file() and relative not in paths:
+            paths.append(relative)
+
+    concrete_module = str(module_overrides.get(module_name) or "").strip()
+    if concrete_module:
+        add_term(module_name)
+        add_term(concrete_module)
+        for concrete_path in implementation_index.get(concrete_module.casefold(), ()):
+            add_path(concrete_path)
+            relations.append(
+                {
+                    "from": module_name,
+                    "to": concrete_module,
+                    "path": concrete_path,
+                    "kind": "module_config_override",
+                }
+            )
+
+    route_bindings = runtime_config.get("route_bindings", []) if isinstance(runtime_config, Mapping) else []
+    for binding in route_bindings if isinstance(route_bindings, Sequence) else ():
+        if not isinstance(binding, Mapping) or str(binding.get("name") or "") != module_name:
+            continue
+        add_term(binding.get("name"))
+        add_term(binding.get("component"))
+        add_term(binding.get("title"))
+        add_path(binding.get("implementation_path"))
+    direct_targets: list[dict[str, Any]] = []
+    for relative in list(paths)[:2]:
+        try:
+            source = (root / relative).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for match in re.finditer(
+            r"\b(?:pageNavigate|navigate|push)\s*\(\s*['\"](?P<target>[A-Za-z_$][\w$]{2,})['\"]",
+            source,
+        ):
+            target = match.group("target")
+            for target_path in implementation_index.get(target.casefold(), ()):
+                if any(item["path"] == target_path for item in direct_targets):
+                    break
+                target_terms = [target]
+                try:
+                    target_source = (root / target_path).read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    target_source = ""
+                for key in re.findall(r"\bresourceStrings\.([A-Za-z_$][\w$]*)", target_source):
+                    if key not in target_terms:
+                        target_terms.append(key)
+                    value = resources.get(key)
+                    if value and value not in target_terms:
+                        target_terms.append(value)
+                direct_targets.append(
+                    {
+                        "from": relative,
+                        "route": target,
+                        "path": target_path,
+                        "terms": target_terms,
+                        "intent_score": _module_intent_overlap(" ".join(target_terms), intent_concepts),
+                    }
+                )
+                break
+
+    direct_targets.sort(key=lambda item: (-float(item["intent_score"]), str(item["route"])))
+    for target in direct_targets:
+        add_path(target["path"])
+        for term in target["terms"]:
+            add_term(term)
+        relations.append({"from": target["from"], "route": target["route"], "to": target["path"]})
+    for relative in fallback_paths:
+        add_path(relative)
+
+    for relative in list(paths)[:4]:
+        try:
+            source = (root / relative).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for key in re.findall(r"\bresourceStrings\.([A-Za-z_$][\w$]*)", source):
+            add_term(key)
+            add_term(resources.get(key))
+    return paths[:6], terms[:16], relations[:8]
 
 
 def _legacy_project_bindings(root: Path) -> dict[str, str]:
@@ -609,7 +1031,13 @@ def _legacy_project_bindings(root: Path) -> dict[str, str]:
 
 
 def _legacy_product_repositories(root: Path) -> dict[str, tuple[str, str]]:
-    """Read product aliases from the nested projects' existing Git remotes."""
+    """Read product aliases from current nested-project source metadata.
+
+    A Codex source view intentionally contains no ``.git`` directories. The
+    checked-in package model and project directory therefore remain the
+    source-only identity, while a real checkout's remote contributes any
+    additional public product alias (for example V03 -> sampleproduct).
+    """
     projects = root / "projects"
     if not projects.is_dir():
         return {}
@@ -617,6 +1045,17 @@ def _legacy_product_repositories(root: Path) -> dict[str, tuple[str, str]]:
     for project_path in sorted(projects.glob("com.example.*")):
         if not project_path.is_dir():
             continue
+        project = project_path.name.removeprefix("com.example.")
+        if not project:
+            continue
+        aliases[project.casefold()] = (project, project)
+        try:
+            package = json.loads((project_path / "package.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            package = {}
+        package_model = str(package.get("model") or "").strip() if isinstance(package, Mapping) else ""
+        if package_model:
+            aliases[package_model.casefold()] = (package_model, project)
         try:
             completed = subprocess.run(
                 ["git", "config", "--get", "remote.origin.url"],
@@ -633,7 +1072,6 @@ def _legacy_product_repositories(root: Path) -> dict[str, tuple[str, str]]:
             continue
         repository_name = re.split(r"[/:]", remote.rstrip("/"))[-1]
         alias = re.sub(r"\.git$", "", repository_name, flags=re.IGNORECASE).strip()
-        project = project_path.name.removeprefix("com.example.")
         if alias and project:
             aliases[alias.casefold()] = (alias, project)
     return aliases
@@ -651,14 +1089,40 @@ def _declared_product_tokens(snapshot: Mapping[str, Any]) -> list[str]:
     return list(dict.fromkeys(value.casefold() for value in values))
 
 
+def _recognized_declared_product_tokens(root: Path, snapshot: Mapping[str, Any]) -> set[str]:
+    """Keep only explicit ticket products represented by current source metadata."""
+    project_aliases = _legacy_product_repositories(root)
+    config_tokens = {Path(relative).stem.removeprefix("exampleModuleConfig_").casefold() for relative in _module_config_bindings(root).values()}
+    recognized: set[str] = set()
+    for token in _declared_product_tokens(snapshot):
+        if token in project_aliases or token in config_tokens:
+            recognized.add(token)
+            continue
+        if any(candidate.startswith(token) and len(candidate) > len(token) and candidate[len(token)].isalpha() for candidate in config_tokens):
+            recognized.add(token)
+    return recognized
+
+
+def _project_override_conflicts_with_declared_product(
+    root: Path,
+    *,
+    path: str,
+    declared_products: set[str],
+) -> bool:
+    """Reject an explicitly different product override, never shared source."""
+    match = re.match(r"projects/com\.loock\.(?P<project>[^/]+)/", path, re.IGNORECASE)
+    if not match or not declared_products:
+        return False
+    project = match.group("project").casefold()
+    identities = {project}
+    identities.update(alias for alias, (_display, mapped_project) in _legacy_product_repositories(root).items() if mapped_project.casefold() == project)
+    return identities.isdisjoint(declared_products)
+
+
 def _resolve_legacy_project(root: Path, *, snapshot: Mapping[str, Any], corpus: str) -> dict[str, Any] | None:
     bindings = _legacy_project_bindings(root)
     repositories = _legacy_product_repositories(root)
-    matched_models = [
-        model
-        for model in bindings
-        if re.search(r"(?<![A-Za-z0-9])" + re.escape(model) + r"(?![A-Za-z0-9])", corpus, re.IGNORECASE)
-    ]
+    matched_models = [model for model in bindings if re.search(r"(?<![A-Za-z0-9])" + re.escape(model) + r"(?![A-Za-z0-9])", corpus, re.IGNORECASE)]
     declared_products = _declared_product_tokens(snapshot)
     matched_aliases = [repositories[token] for token in declared_products if token in repositories]
     if matched_models:
@@ -667,7 +1131,7 @@ def _resolve_legacy_project(root: Path, *, snapshot: Mapping[str, Any], corpus: 
         aliases_by_project: dict[str, str] = {}
     elif matched_aliases:
         projects = list(dict.fromkeys(project for _alias, project in matched_aliases))
-        basis = "current_checkout_nested_repository_remote"
+        basis = "current_checkout_nested_project_identity"
         aliases_by_project = {project: alias for alias, project in matched_aliases}
     else:
         return None
@@ -733,9 +1197,19 @@ def _module_implementation_index(root: Path) -> dict[str, list[str]]:
     return index
 
 
-def _module_profile(*, root: Path, name: str, nickname: str, paths: Sequence[str], concepts: Sequence[str] = ()) -> str:
+def _module_profile(
+    *,
+    root: Path,
+    name: str,
+    nickname: str,
+    paths: Sequence[str],
+    concepts: Sequence[str] = (),
+    navigation_terms: Sequence[str] = (),
+) -> str:
     """Build a bounded current-source description used only to rank enabled modules."""
     parts = [f"模块名 {name}", f"模块昵称 {nickname}"]
+    if navigation_terms:
+        parts.append("当前产品源码导航 " + " ".join(navigation_terms[:16]))
     for relative in list(paths)[:2]:
         path = root / relative
         try:
@@ -846,6 +1320,7 @@ def resolve_module_architecture(
         return legacy_resolution or {"status": "unresolved", "reason": "model_config_bindings_not_found", "modules": [], "anchors": []}
 
     product_tokens = set(build_product_scope_tokens(bug_snapshot))
+    available_configs: list[tuple[str, str, Mapping[str, Any]]] = []
     ranked_configs: list[tuple[int, str, str, Mapping[str, Any]]] = []
     for model, relative in bindings.items():
         path = root / relative
@@ -853,6 +1328,7 @@ def resolve_module_architecture(
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
+        available_configs.append((model, relative, payload))
         score = 0
         if model.casefold() in resolution_corpus:
             score += 400
@@ -864,12 +1340,33 @@ def resolve_module_architecture(
             score += 320
         if score:
             ranked_configs.append((score, model, relative, payload))
+    match_basis = "current_checkout_module_manager_and_config"
+    reachability = "confirmed"
     if not ranked_configs:
-        return legacy_resolution or {"status": "unresolved", "reason": "model_not_identified_from_ticket", "modules": [], "anchors": []}
+        family_configs = [
+            (model, relative, payload)
+            for model, relative, payload in available_configs
+            for token in product_tokens
+            if len(token) >= 3 and (suffix := Path(relative).stem.removeprefix("exampleModuleConfig_").casefold()).startswith(token) and len(suffix) > len(token) and suffix[len(token)].isalpha()
+        ]
+        family_configs = list({relative: (model, relative, payload) for model, relative, payload in family_configs}.values())
+        signatures = {_module_config_signature(root, model=model, payload=payload) for model, _relative, payload in family_configs}
+        if family_configs and len(signatures) == 1:
+            ranked_configs = [(180, model, relative, payload) for model, relative, payload in family_configs]
+            match_basis = "current_checkout_product_family_consensus"
+            reachability = "family_consensus"
+        else:
+            reason = "product_family_configs_diverge" if family_configs else "model_not_identified_from_ticket"
+            return legacy_resolution or {"status": "unresolved", "reason": reason, "modules": [], "anchors": []}
     ranked_configs.sort(key=lambda item: (-item[0], item[1]))
     _score, model, config_path, payload = ranked_configs[0]
+    matched_models = [item[1] for item in ranked_configs]
+    matched_config_paths = list(dict.fromkeys(item[2] for item in ranked_configs))
 
     implementation_index = _module_implementation_index(root)
+    runtime_config = _runtime_config_for_model(root, model)
+    module_overrides = _module_config_overrides(payload)
+    localized_resources = {key: value for key, (value, _layers) in _localized_resource_values(root).items()}
     concepts = build_fallback_concepts(
         bug_snapshot=bug_snapshot,
         query_facts=query_facts,
@@ -886,8 +1383,25 @@ def resolve_module_architecture(
         nickname = str(raw_module.get("nickname") or "").strip()
         if not name:
             continue
-        paths = implementation_index.get(name.casefold(), [])
-        profile = _module_profile(root=root, name=name, nickname=nickname, paths=paths, concepts=(*concepts, *intent_concepts))
+        fallback_paths = implementation_index.get(name.casefold(), [])
+        paths, navigation_terms, navigation_relations = _module_source_navigation(
+            root=root,
+            module_name=name,
+            module_overrides=module_overrides,
+            runtime_config=runtime_config,
+            implementation_index=implementation_index,
+            fallback_paths=fallback_paths,
+            resources=localized_resources,
+            intent_concepts=intent_concepts,
+        )
+        profile = _module_profile(
+            root=root,
+            name=name,
+            nickname=nickname,
+            paths=paths,
+            concepts=(*concepts, *intent_concepts),
+            navigation_terms=navigation_terms,
+        )
         identity_relevance = _module_relevance(name, nickname, module_intent_corpus)
         support_relevance = _module_profile_overlap(profile, concepts)
         business_relevance = identity_relevance + _module_intent_overlap(profile, intent_concepts)
@@ -901,6 +1415,8 @@ def resolve_module_architecture(
                 "module_name": name,
                 "module_nickname": nickname,
                 "implementation_paths": paths[:4],
+                "navigation_terms": navigation_terms,
+                "navigation_relations": navigation_relations,
                 "intent_score": float(business_relevance),
                 "intent_anchors": matched_intents,
                 "selection_basis": "module_identity" if identity_relevance else "source_profile_overlap" if profile_relevance else "product_config",
@@ -929,6 +1445,8 @@ def resolve_module_architecture(
                 "name": str(candidate.get("module_name") or ""),
                 "nickname": str(candidate.get("module_nickname") or ""),
                 "implementation_paths": list(candidate.get("implementation_paths") or []),
+                "navigation_terms": list(candidate.get("navigation_terms") or []),
+                "navigation_relations": list(candidate.get("navigation_relations") or []),
                 "selection_basis": "semantic_module_profile" if isinstance(semantic_score, (int, float)) else str(candidate.get("selection_basis") or "product_config"),
                 "semantic_score": float(semantic_score) if isinstance(semantic_score, (int, float)) else None,
                 "intent_score": float(intent_score) if isinstance(intent_score, (int, float)) else 0.0,
@@ -936,23 +1454,28 @@ def resolve_module_architecture(
                 "profile_excerpt": str(candidate.get("content") or "")[:600],
             }
         )
+    selected_navigation_terms = list(dict.fromkeys(term for module_rank, module in enumerate(modules) if module_rank == 0 or module.get("intent_anchors") for term in module.get("navigation_terms", []) if str(term).strip()))[:16]
     anchors = [
+        *selected_navigation_terms,
         *(module["name"] for module in modules),
         *(anchor for module in modules for anchor in module.get("intent_anchors", [])),
         model,
         Path(config_path).stem,
     ]
-    runtime_config = _runtime_config_for_model(root, model)
     return {
         "status": "ready",
         "architecture_kind": "module_config",
         "model": model,
+        "models": matched_models,
         "config_path": config_path,
-        "match_basis": "current_checkout_module_manager_and_config",
+        "config_paths": matched_config_paths,
+        "match_basis": match_basis,
+        "reachability": reachability,
         "selection_status": selection_status,
         "configured_module_count": configured_module_count,
         "module_intent_query": module_intent_query,
         "modules": modules,
+        "navigation_terms": selected_navigation_terms,
         **({"runtime_config": runtime_config} if runtime_config else {}),
         "anchors": list(dict.fromkeys(anchors)),
     }
@@ -968,7 +1491,10 @@ def _product_scope_adjustment(path: str, requested: Sequence[str]) -> tuple[floa
     if path_token in requested:
         return 0.08, "matched"
     same_family = any(token.isdigit() == path_token.isdigit() for token in requested)
-    return (-0.12, "conflicting" if same_family else "unmapped") if same_family else (0.0, "unmapped")
+    # A differently named product override is not a shared implementation.
+    # Keep it discoverable, but do not let an unrelated project outrank the
+    # current checkout's shared source merely because its copy is similar.
+    return (-0.12, "conflicting") if same_family else (-0.18, "unmapped")
 
 
 def _resolve_secret(value: str | None, file_value: str | None = None) -> str:
@@ -1254,10 +1780,57 @@ def _grep_items(files: Any, *, anchor: str, anchor_rank: int, retrieval_stage: s
     return items
 
 
-def _architecture_items(root: Path, resolution: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """Create exact current-source candidates for resolved shared modules."""
+def _architecture_items(
+    root: Path,
+    resolution: Mapping[str, Any],
+    *,
+    intent_terms: Sequence[str] = (),
+) -> list[dict[str, Any]]:
+    """Create exact current-source candidates for resolved product architecture."""
     items: list[dict[str, Any]] = []
+    if resolution.get("architecture_kind") == "legacy_project":
+        resolved_project = str(resolution.get("resolved_project") or "").strip()
+        project_root = root / "projects" / f"com.example.{resolved_project}"
+        terms = list(dict.fromkeys(term.casefold() for term in intent_terms if len(term) >= 3))
+        ranked: list[tuple[int, Path, str, int]] = []
+        if resolved_project and project_root.is_dir() and terms:
+            for path in sorted(project_root.rglob("*")):
+                if not path.is_file() or path.suffix.casefold() not in _SOURCE_SUFFIXES:
+                    continue
+                try:
+                    source = path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                folded_path = path.relative_to(root).as_posix().casefold()
+                folded_source = source.casefold()
+                path_hits = [term for term in terms if term in folded_path]
+                source_hits = [term for term in terms if term in folded_source]
+                distinct_hits = set(path_hits) | set(source_hits)
+                if len(distinct_hits) < 2:
+                    continue
+                first_offsets = [folded_source.find(term) for term in distinct_hits if term in folded_source]
+                first_offset = min((offset for offset in first_offsets if offset >= 0), default=0)
+                score = len(path_hits) * 120 + len(distinct_hits) * 45
+                ranked.append((score, path, source, first_offset))
+        ranked.sort(key=lambda item: (-item[0], item[1].as_posix()))
+        for rank, (score, path, source, offset) in enumerate(ranked[:6]):
+            start = max(0, offset - 600)
+            relative = path.relative_to(root).as_posix()
+            items.append(
+                {
+                    "filepath": relative,
+                    "start_line": source[:start].count("\n") + 1,
+                    "content": source[start : start + 1_800],
+                    "score": float(score),
+                    "intent_score": float(score),
+                    "matched_anchor": " ".join(terms[:8]),
+                    "retrieval_stage": "legacy_project_profile",
+                    "business_seed": rank == 0,
+                }
+            )
+        return items
     modules = resolution.get("modules")
+    reachability = str(resolution.get("reachability") or "unresolved")
     if not isinstance(modules, Sequence) or isinstance(modules, (str, bytes, bytearray)):
         return items
     for module_rank, module in enumerate(modules):
@@ -1293,6 +1866,7 @@ def _architecture_items(root: Path, resolution: Mapping[str, Any]) -> list[dict[
                     "matched_anchor": next((term for term in search_terms if term in lines[index]), name),
                     "retrieval_stage": "module_architecture",
                     "business_seed": module_rank == 0 and intent_score > 0,
+                    "reachability": reachability,
                 }
             )
     return items
@@ -1317,18 +1891,15 @@ def _implementation_layer(path: str) -> str:
 def _code_path_adjustment(path: str) -> tuple[float, str]:
     candidate = Path(path)
     parts = {part.casefold() for part in candidate.parts}
-    is_localized_resource = (
-        candidate.suffix.casefold() in _RESOURCE_SUFFIXES
-        and (
-            bool(parts & _RESOURCE_PATH_PARTS)
-            or any(part.startswith("values") or part.endswith(".lproj") for part in parts)
-            or candidate.name.casefold() == "localizable.strings"
-        )
+    is_localized_resource = (candidate.suffix.casefold() in _RESOURCE_SUFFIXES or (candidate.suffix.casefold() in {".js", ".ts"} and bool(parts & {"lang", "langs", "locales"}))) and (
+        bool(parts & _RESOURCE_PATH_PARTS) or any(part.startswith("values") or part.endswith(".lproj") for part in parts) or candidate.name.casefold() == "localizable.strings"
     )
-    if candidate.suffix.casefold() in _SOURCE_SUFFIXES and not is_localized_resource:
-        return 0.08, "implementation"
     if is_localized_resource:
         return 0.0, "resource"
+    if candidate.suffix.casefold() in _SOURCE_SUFFIXES:
+        if path.startswith("modules/config/") and candidate.name == "Config.js":
+            return 0.0, "configuration"
+        return (0.12 if parts & {"page", "pages"} else 0.08), "implementation"
     return 0.0, "other"
 
 
@@ -1356,9 +1927,6 @@ def _layer_balanced_candidates(candidates: Sequence[dict[str, Any]], requested: 
             seen.add(path)
             selected.append(item)
 
-    # Product-module resolution has already ranked current source against the
-    # ticket, screenshot, page, action and field facts. Preserve that primary
-    # business entry before a downstream native log triggers layer balancing.
     seed = next((item for item in ordered if item.get("business_seed") is True), None)
     if seed is not None:
         add(seed)
@@ -1366,20 +1934,17 @@ def _layer_balanced_candidates(candidates: Sequence[dict[str, Any]], requested: 
     for layer in requested:
         if any(item.get("implementation_layer") == layer for item in selected):
             continue
-        match = next((item for item in ordered if item.get("implementation_layer") == layer), None)
+        match = next(
+            (item for item in ordered if item.get("implementation_layer") == layer and item.get("evidence_role") == "implementation"),
+            None,
+        ) or next((item for item in ordered if item.get("implementation_layer") == layer), None)
         if match is not None:
             add(match)
     # When space permits, pair a layer's consumer with its localization resource.
     for layer in requested:
         present_roles = {item.get("evidence_role") for item in selected if item.get("implementation_layer") == layer}
         complement = next(
-            (
-                item
-                for item in ordered
-                if item.get("implementation_layer") == layer
-                and item.get("evidence_role") in {"implementation", "resource"}
-                and item.get("evidence_role") not in present_roles
-            ),
+            (item for item in ordered if item.get("implementation_layer") == layer and item.get("evidence_role") in {"implementation", "resource"} and item.get("evidence_role") not in present_roles),
             None,
         )
         if complement is not None:
@@ -1389,21 +1954,64 @@ def _layer_balanced_candidates(candidates: Sequence[dict[str, Any]], requested: 
     return selected
 
 
-def _balanced_raw_candidates(*, architecture: Sequence[dict[str, Any]], exact: Sequence[dict[str, Any]], concepts: Sequence[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
-    """Keep every retrieval layer represented before semantic reranking."""
-    selected: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
-    pools = [list(architecture), list(exact), list(concepts)]
-    while len(selected) < limit and any(pools):
+def _fuse_candidate_pools(*, pools: Sequence[Sequence[dict[str, Any]]], limit: int) -> list[dict[str, Any]]:
+    """Fuse independent ranked views once, at file granularity.
+
+    Provider scores are intentionally incomparable (Tabby RRF, repository grep
+    rank and architecture relevance).  Reciprocal-rank fusion uses only each
+    view's ordering, rewards agreement between views, and prevents multiple
+    snippets from one file consuming the bounded candidate budget.
+    """
+    fused: dict[str, dict[str, Any]] = {}
+    for pool in pools:
+        seen_in_pool: set[str] = set()
+        for rank, raw_item in enumerate(pool):
+            path = str(raw_item.get("filepath") or "")
+            if not path or path in seen_in_pool:
+                continue
+            seen_in_pool.add(path)
+            contribution = 1.0 / (60.0 + rank + 1.0)
+            existing = fused.get(path)
+            if existing is None:
+                item = dict(raw_item)
+                item["provider_score"] = raw_item.get("score")
+                item["retrieval_stages"] = [str(raw_item.get("retrieval_stage") or "unknown")]
+                item["score"] = contribution
+                fused[path] = item
+                continue
+            existing["score"] = float(existing.get("score") or 0.0) + contribution
+            stage = str(raw_item.get("retrieval_stage") or "unknown")
+            if stage not in existing["retrieval_stages"]:
+                existing["retrieval_stages"].append(stage)
+            if raw_item.get("business_seed") is True:
+                existing["business_seed"] = True
+    ordered = sorted(fused.values(), key=lambda item: (-float(item.get("score") or 0.0), str(item.get("filepath") or "")))[:limit]
+    for rank, item in enumerate(ordered):
+        item["fusion_score"] = item.get("score")
+        item["score"] = max(0.0, 1.0 - rank * 0.02)
+    return ordered
+
+
+def _allocate_anchor_queries(*, groups: Sequence[Sequence[str]], limit: int) -> list[str]:
+    """Share the exact-query budget across ticket, navigation and structure.
+
+    A flat concatenation allowed the first group to consume the whole budget.
+    Round-robin allocation keeps every available evidence class represented
+    without assigning fixed slots to any product or Bug.
+    """
+    selected: list[str] = []
+    seen: set[str] = set()
+    remaining = [list(dict.fromkeys(str(value).strip() for value in group if str(value).strip())) for group in groups if group]
+    while len(selected) < limit and any(remaining):
         progressed = False
-        for pool in pools:
-            while pool:
-                item = pool.pop(0)
-                identity = (str(item.get("filepath") or ""), str(item.get("content") or ""))
-                if not identity[0] or identity in seen:
+        for group in remaining:
+            while group:
+                value = group.pop(0)
+                folded = value.casefold()
+                if folded in seen:
                     continue
-                seen.add(identity)
-                selected.append(item)
+                seen.add(folded)
+                selected.append(value)
                 progressed = True
                 break
             if len(selected) >= limit:
@@ -1491,11 +2099,7 @@ def _semantic_rank(
         lexical_score = float(item.get("score") or 0.0)
         item["lexical_score"] = lexical_score
         module_intent_score = float(item.get("intent_score") or 0.0)
-        intent_adjustment = (
-            min(0.20, module_intent_score / module_intent_max * 0.20)
-            if item.get("retrieval_stage") == "module_profile" and module_intent_max > 0 and module_intent_score > 0
-            else 0.0
-        )
+        intent_adjustment = min(0.20, module_intent_score / module_intent_max * 0.20) if item.get("retrieval_stage") == "module_profile" and module_intent_max > 0 and module_intent_score > 0 else 0.0
         item["score"] = semantic_score + adjustment + code_adjustment + intent_adjustment
     bounded.sort(key=lambda item: float(item.get("score", -1)), reverse=True)
     best = float(bounded[0].get("score", 0)) if bounded else 0.0
@@ -1609,6 +2213,7 @@ def _candidate_from_item(
             "product_scope": str(item.get("product_scope") or "unspecified"),
             "verified_edges": [],
             "business_seed": item.get("business_seed") is True,
+            "reachability": str(item.get("reachability") or "unresolved"),
         },
         "",
     )
@@ -1635,6 +2240,11 @@ def build_source_retrieval(
         max_chars=int(getattr(config, "max_query_chars", 1600)),
         retrieval_aliases=retrieval_aliases,
     )
+    duty_query = build_code_duty_query(
+        bug_snapshot=bug_snapshot,
+        query_facts=query_facts,
+        max_chars=min(640, int(getattr(config, "max_query_chars", 1600))),
+    )
     architecture_resolution = resolve_module_architecture(
         repository_root=root,
         repository=repository,
@@ -1643,18 +2253,25 @@ def build_source_retrieval(
         query=query,
         config=config,
     )
+    resource_navigation = _ticket_resource_navigation(root, bug_snapshot=bug_snapshot, query_facts=query_facts) if repository in {"sample_mobile_repo", "sample_platform_repo"} else []
+    query = _enrich_query_with_navigation(
+        query,
+        [*architecture_resolution.get("navigation_terms", []), *resource_navigation[:1]],
+        max_chars=int(getattr(config, "max_query_chars", 1600)),
+    )
     base = {
-        "schema_version": 3,
+        "schema_version": 4,
         "provider": "tabby",
         "repository": repository,
         "source_revision": revision,
         "query": query,
+        "duty_query": duty_query,
         "entries": [],
         "relations": [],
         "resource_coverage": [],
         "architecture_resolution": architecture_resolution,
         "rejections": [],
-        "metrics": {"query_chars": len(query), "raw_candidate_count": 0, "entry_count": 0},
+        "metrics": {"query_chars": len(query), "duty_query_chars": len(duty_query), "raw_candidate_count": 0, "entry_count": 0},
     }
     if not enabled:
         return {**base, "status": "disabled", "reason": "source_retrieval_disabled"}
@@ -1684,18 +2301,20 @@ def build_source_retrieval(
     if token:
         headers["Authorization"] = f"Bearer {token}"
     max_anchor_queries = int(getattr(config, "max_anchor_queries", 8))
-    ticket_anchor_budget = max(1, max_anchor_queries - 3)
     ticket_anchors = build_retrieval_anchors(
         query=query,
         query_facts=query_facts,
-        max_anchors=ticket_anchor_budget,
+        max_anchors=max_anchor_queries,
         retrieval_aliases=retrieval_aliases,
     )
+    navigation_anchors = [str(value) for value in [*architecture_resolution.get("navigation_terms", []), *resource_navigation] if str(value).strip()]
+    duty_anchors = _code_duty_anchor_terms(bug_snapshot=bug_snapshot, query_facts=query_facts)
     module_anchors = [str(item.get("name") or "") for item in architecture_resolution.get("modules", []) if isinstance(item, Mapping) and item.get("name")]
     architecture_anchors = [str(value) for value in architecture_resolution.get("anchors", []) if str(value).strip()]
-    # Ticket/action anchors express the reported behavior. Module and model
-    # anchors supplement them but may not consume the whole bounded grep plan.
-    anchors = list(dict.fromkeys([*ticket_anchors, *module_anchors, *architecture_anchors]))[:max_anchor_queries]
+    anchors = _allocate_anchor_queries(
+        groups=(ticket_anchors, navigation_anchors, duty_anchors, module_anchors, architecture_anchors),
+        limit=max_anchor_queries,
+    )
     fallback_concepts: list[str] = []
     requested_layers = _requested_implementation_layers(query_facts)
     product_scope_tokens = build_product_scope_tokens(
@@ -1727,36 +2346,52 @@ def build_source_retrieval(
         )
         if not isinstance(selected, Mapping):
             return {**base, "status": "unavailable", "reason": "tabby_repository_not_registered"}
-        architecture_items = _architecture_items(root, architecture_resolution)
+        architecture_items = _architecture_items(
+            root,
+            architecture_resolution,
+            intent_terms=duty_anchors,
+        )
         hybrid_items: list[dict[str, Any]] = []
+        duty_items: list[dict[str, Any]] = []
         hybrid_status = "unavailable"
-        hybrid_thread_id: str | None = None
+        duty_status = "not_run"
         source_id = str(selected.get("sourceId") or "")
-        if source_id:
+
+        def collect_hybrid(query_text: str, *, stage: str) -> tuple[list[dict[str, Any]], str]:
+            if not source_id or not query_text.strip():
+                return [], "no_match"
+            thread_id: str | None = None
             try:
-                hybrid_items, hybrid_thread_id = _collect_tabby_hybrid_items(
+                items, thread_id = _collect_tabby_hybrid_items(
                     base_url=str(getattr(config, "base_url", "http://127.0.0.1:8080")),
                     authorization=headers.get("Authorization", ""),
                     source_id=source_id,
-                    query_text=query,
+                    query_text=query_text,
                     timeout=timeout,
                     limit=int(getattr(config, "max_raw_candidates", 24)),
                 )
-                hybrid_status = "ready" if hybrid_items else "no_match"
+                for item in items:
+                    item["retrieval_stage"] = stage
+                return items, "ready" if items else "no_match"
             except (OSError, TimeoutError, ValueError, WebSocketException):
-                hybrid_status = "unavailable"
+                return [], "unavailable"
             finally:
-                if hybrid_thread_id:
+                if thread_id:
                     try:
                         _graphql(
                             endpoint=endpoint,
                             headers=headers,
                             query="mutation DeleteRetrievalThread($id: ID!) { deleteThread(id: $id) }",
-                            variables={"id": hybrid_thread_id},
+                            variables={"id": thread_id},
                             timeout=timeout,
                         )
                     except (httpx.HTTPError, ValueError):
                         pass
+
+        if source_id:
+            hybrid_items, hybrid_status = collect_hybrid(query, stage="tabby_hybrid")
+            if duty_query and duty_query != query:
+                duty_items, duty_status = collect_hybrid(duty_query, stage="tabby_code_duty")
         exact_items: list[dict[str, Any]] = []
         concept_items: list[dict[str, Any]] = []
         grep_query = """
@@ -1770,9 +2405,8 @@ def build_source_retrieval(
         max_raw_candidates = int(getattr(config, "max_raw_candidates", 24))
 
         def retrieve(terms: Sequence[str], *, stage: str, destination: list[dict[str, Any]]) -> None:
-            seen_items = {(str(item.get("filepath") or ""), str(item.get("content") or "")) for item in destination}
+            term_pools: list[list[dict[str, Any]]] = []
             for anchor_rank, anchor in enumerate(terms):
-                per_term_limit = 8 if len(anchor) >= 3 else 4
                 data = _graphql(
                     endpoint=endpoint,
                     headers=headers,
@@ -1787,24 +2421,32 @@ def build_source_retrieval(
                 grep = data.get("repositoryGrep")
                 if isinstance(grep, Mapping):
                     anchor_items = _grep_items(grep.get("files"), anchor=anchor, anchor_rank=anchor_rank, retrieval_stage=stage)
+                    anchor_items.sort(
+                        key=lambda item: (
+                            _product_scope_adjustment(str(item.get("filepath") or ""), product_scope_tokens)[0] + _code_path_adjustment(str(item.get("filepath") or ""))[0],
+                            str(item.get("filepath") or "").startswith("modules/"),
+                        ),
+                        reverse=True,
+                    )
+                    term_items: list[dict[str, Any]] = []
                     seen_anchor_paths: set[str] = set()
                     for item in anchor_items:
                         path = str(item.get("filepath") or "")
-                        identity = (path, str(item.get("content") or ""))
-                        if not path or path in seen_anchor_paths or identity in seen_items:
+                        if not path or path in seen_anchor_paths:
                             continue
                         seen_anchor_paths.add(path)
-                        seen_items.add(identity)
-                        destination.append(item)
-                        if len(seen_anchor_paths) >= per_term_limit or len(destination) >= max_raw_candidates:
-                            break
-                if len(destination) >= max_raw_candidates:
-                    break
+                        term_items.append(item)
+                    # Fuse every returned file before the shared candidate cap:
+                    # per-term slicing discarded consumers before agreement
+                    # across independent anchors could affect their rank.
+                    if term_items:
+                        term_pools.append(term_items)
+            destination.extend(_fuse_candidate_pools(pools=term_pools, limit=max_raw_candidates))
 
         retrieve(anchors, stage="exact_anchor", destination=exact_items)
-        pre_fallback_items = [*architecture_items, *hybrid_items, *exact_items]
+        pre_fallback_items = [*architecture_items, *hybrid_items, *duty_items, *exact_items]
         missing_layers_before_fallback = _missing_implementation_layers(pre_fallback_items, requested_layers)
-        if not hybrid_items or missing_layers_before_fallback:
+        if not hybrid_items or not duty_items or missing_layers_before_fallback:
             fallback_concepts = build_fallback_concepts(
                 bug_snapshot=bug_snapshot,
                 query_facts=query_facts,
@@ -1813,67 +2455,59 @@ def build_source_retrieval(
                 max_concepts=int(getattr(config, "max_fallback_concepts", 8)),
             )
             retrieve(fallback_concepts, stage="concept_expansion", destination=concept_items)
-        if hybrid_items:
-            raw_items = []
-            seen_hybrid: set[tuple[str, str]] = set()
-            for item in [*architecture_items, *hybrid_items, *exact_items, *concept_items]:
-                identity = (str(item.get("filepath") or ""), str(item.get("content") or ""))
-                if not identity[0] or identity in seen_hybrid:
-                    continue
-                seen_hybrid.add(identity)
-                raw_items.append(item)
-                if len(raw_items) >= max_raw_candidates:
-                    break
-        else:
-            raw_items = _balanced_raw_candidates(
-                architecture=architecture_items,
-                exact=exact_items,
-                concepts=concept_items,
-                limit=max_raw_candidates,
-            )
-    except (httpx.HTTPError, ValueError) as exc:
-        return {**base, "status": "unavailable", "reason": type(exc).__name__}
-    raw_candidate_count = len(raw_items)
-    business_seed_paths = {
-        str(item.get("filepath") or "")
-        for item in architecture_items
-        if item.get("business_seed") is True and str(item.get("filepath") or "")
-    }
-    for item in raw_items:
-        if str(item.get("filepath") or "") in business_seed_paths:
-            item["business_seed"] = True
-    if hybrid_items:
-        for item in raw_items:
-            adjustment, scope = _product_scope_adjustment(str(item.get("filepath") or ""), product_scope_tokens)
-            code_adjustment, candidate_kind = _code_path_adjustment(str(item.get("filepath") or ""))
-            item["product_scope"] = scope
-            item["candidate_kind"] = candidate_kind
-            item["implementation_layer"] = _implementation_layer(str(item.get("filepath") or ""))
-            item["score"] = float(item.get("score") or 0.0) + adjustment + code_adjustment
-        semantic_status = "tabby_hybrid"
-    else:
-        ranking_query = str(architecture_resolution.get("module_intent_query") or "").strip() or query
-        raw_items, semantic_status = _semantic_rank(
+        lexical_items = _fuse_candidate_pools(
+            pools=(exact_items, concept_items),
+            limit=max_raw_candidates,
+        )
+        ranking_query = "\n".join(part for part in (duty_query, query) if part).strip()[:2_400]
+        lexical_items, semantic_status = _semantic_rank(
             query=ranking_query,
-            items=raw_items,
+            items=lexical_items,
             config=config,
             timeout=timeout,
             product_scope_tokens=product_scope_tokens,
             requested_layers=requested_layers,
         )
+        raw_items = _fuse_candidate_pools(
+            pools=(architecture_items, hybrid_items, duty_items, lexical_items),
+            limit=max_raw_candidates,
+        )
+    except (httpx.HTTPError, ValueError) as exc:
+        return {**base, "status": "unavailable", "reason": type(exc).__name__}
+    raw_candidate_count = len(raw_items)
+    business_seed_paths = {str(item.get("filepath") or "") for item in architecture_items if item.get("business_seed") is True and str(item.get("filepath") or "")}
+    for item in raw_items:
+        if str(item.get("filepath") or "") in business_seed_paths:
+            item["business_seed"] = True
+    for item in raw_items:
+        adjustment, scope = _product_scope_adjustment(str(item.get("filepath") or ""), product_scope_tokens)
+        code_adjustment, candidate_kind = _code_path_adjustment(str(item.get("filepath") or ""))
+        item["product_scope"] = scope
+        item["candidate_kind"] = candidate_kind
+        item["implementation_layer"] = _implementation_layer(str(item.get("filepath") or ""))
+        item["score"] = float(item.get("score") or 0.0) + adjustment + code_adjustment
+    raw_items.sort(key=lambda item: float(item.get("score") or -1.0), reverse=True)
     validated_candidates: list[dict[str, Any]] = []
     rejections: list[dict[str, str]] = []
-    if architecture_resolution.get("architecture_kind") == "module_config":
-        enabled_module_paths = {
-            str(path)
-            for module in architecture_resolution.get("modules", [])
-            if isinstance(module, Mapping)
-            for path in module.get("implementation_paths", [])
-        }
+    architecture_kind = str(architecture_resolution.get("architecture_kind") or "")
+    declared_products = _recognized_declared_product_tokens(root, bug_snapshot)
+    if architecture_kind in {"module_config", "legacy_project"} or declared_products:
+        enabled_module_paths = {str(path) for module in architecture_resolution.get("modules", []) if isinstance(module, Mapping) for path in module.get("implementation_paths", [])}
+        resolved_project = str(architecture_resolution.get("resolved_project") or "").strip()
+        selected_project_prefix = f"projects/com.example.{resolved_project}/" if architecture_kind == "legacy_project" and resolved_project else ""
         retained_items: list[dict[str, Any]] = []
         for item in raw_items:
             path = str(item.get("filepath") or "")
-            if path.startswith("projects/com.example.") and path not in enabled_module_paths:
+            unselected_override = path.startswith("projects/com.example.") and (
+                (architecture_kind == "module_config" and path not in enabled_module_paths)
+                or (architecture_kind == "legacy_project" and bool(selected_project_prefix) and not path.startswith(selected_project_prefix))
+                or _project_override_conflicts_with_declared_product(
+                    root,
+                    path=path,
+                    declared_products=declared_products,
+                )
+            )
+            if unselected_override:
                 if len(rejections) < 12:
                     rejections.append({"path": path[:300], "reason": "unselected_product_override"})
                 continue
@@ -1924,6 +2558,7 @@ def build_source_retrieval(
         "rejections": rejections,
         "metrics": {
             "query_chars": len(query),
+            "duty_query_chars": len(duty_query),
             "raw_candidate_count": raw_candidate_count,
             "ranked_candidate_count": len(raw_items),
             "entry_count": len(entries),
@@ -1937,15 +2572,18 @@ def build_source_retrieval(
             "missing_layers_after_selection": _missing_implementation_layers(entries, requested_layers),
             "architecture_status": architecture_resolution.get("status"),
             "architecture_model": architecture_resolution.get("model"),
-            "architecture_module_count": len(architecture_resolution.get("modules") or []),
             "business_seed_path": next((entry["path"] for entry in entries if entry.get("business_seed") is True), ""),
+            "architecture_module_count": len(architecture_resolution.get("modules") or []),
             "product_scope_tokens": product_scope_tokens,
             "business_alias_count": len(tuple(retrieval_aliases)),
+            "resource_navigation": resource_navigation,
             "retrieval_mode": (
                 "tabby_hybrid" if hybrid_items else "layered" if exact_items and concept_items else "concept_fallback" if concept_items else "module_architecture" if architecture_items else "exact_anchor" if exact_items else "none"
             ),
             "tabby_hybrid_status": hybrid_status,
             "tabby_hybrid_candidate_count": len(hybrid_items),
+            "tabby_code_duty_status": duty_status,
+            "tabby_code_duty_candidate_count": len(duty_items),
             "semantic_status": semantic_status,
         },
     }

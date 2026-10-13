@@ -41,6 +41,17 @@ class ReleaseGuardTests(unittest.TestCase):
         (folder / 'attachment.txt').write_text('synthetic attachment')
         self.assertTrue(guard.scan(self.root)[1])
 
+    def test_runtime_wiki_connection_is_blocked(self):
+        (self.root / 'examplewiki-mcp.json').write_text('{}')
+        self.assertTrue(guard.scan(self.root)[1])
+
+    def test_private_corpus_and_log_index_are_blocked(self):
+        for name in ('composite-repositories', '.deerflow-runtime-evidence'):
+            folder = self.root / name
+            folder.mkdir()
+            (folder / 'sample.txt').write_text('fictional private runtime content')
+        self.assertEqual(len(guard.scan(self.root)[1]), 2)
+
     def test_fixture_allowlist_requires_unchanged_bytes(self):
         token = 'sk' + '-' + 'B' * 30
         fixture = self.root / 'fixture.py'

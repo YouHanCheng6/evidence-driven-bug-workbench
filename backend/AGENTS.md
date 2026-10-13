@@ -12,6 +12,17 @@ Read `../docs/personal/SOURCE_MAP.md` and the redaction limitations before edits
 Enterprise data, private Agent files and customized business fixtures are absent.
 The public baseline tests below are not proof of this edition's compatibility.
 
+Current public snapshot (2026-10-13): `bug_codex_summary.py` gates optional
+`examplewiki` access on an evidence-backed embedded fault hypothesis and checks
+report responsibility consistency. Eight fictional read tools are allowlisted;
+credentials are runtime-only. `bug_attachment_evidence.py` has a separate
+ephemeral tool-free visual extraction turn. `bug_log_query_runtime.py` streams
+accepted sources into private indexes and preserves bounded complete member
+sets. Retrieval ranks each evidence view before file-level fusion. History is
+conditional on an explicit regression/version question or a known direct change
+at a verified fault target. The SDK read-only sandbox is not host-wide read
+isolation. Offline public contracts live in `../tests/public_release/`.
+
 This file provides guidance to AI coding agents (Claude Code, Codex, and others) when working with code in this repository. It is the source of truth; the sibling `CLAUDE.md` imports it via `@AGENTS.md`.
 
 ## Project Overview

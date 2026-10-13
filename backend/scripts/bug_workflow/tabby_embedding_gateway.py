@@ -14,7 +14,6 @@ import http.client
 import json
 import os
 import queue
-import socket
 import sys
 import threading
 import time
@@ -50,7 +49,6 @@ class Batcher:
         self.max_batch_inputs = max_batch_inputs
         self.max_batch_chars = max_batch_chars
         self.batch_window = batch_window_ms / 1000
-        # Prefer the newest interactive retrieval when requests briefly queue.
         self.pending: queue.LifoQueue[Pending] = queue.LifoQueue(maxsize=256)
         for index in range(workers):
             threading.Thread(
@@ -79,11 +77,7 @@ class Batcher:
                 except queue.Empty:
                     break
                 item_chars = sum(len(value) for value in item.inputs)
-                if (
-                    item.model != first.model
-                    or count + len(item.inputs) > self.max_batch_inputs
-                    or char_count + item_chars > self.max_batch_chars
-                ):
+                if item.model != first.model or count + len(item.inputs) > self.max_batch_inputs or char_count + item_chars > self.max_batch_chars:
                     self.pending.put(item)
                     break
                 batch.append(item)
@@ -132,28 +126,16 @@ class Batcher:
                     error_payload = {}
                 error = error_payload.get("error", {}) if isinstance(error_payload, dict) else {}
                 print(
-                    "embedding upstream rejected batch: "
-                    f"status={status} inputs={len(inputs)} chars={sum(len(value) for value in inputs)} "
-                    f"type={error.get('type', 'unknown')} code={error.get('code', 'unknown')}",
+                    f"embedding upstream rejected batch: status={status} inputs={len(inputs)} chars={sum(len(value) for value in inputs)} type={error.get('type', 'unknown')} code={error.get('code', 'unknown')}",
                     file=sys.stderr,
                     flush=True,
                 )
                 if status not in {429, 502, 503, 504}:
                     break
-            except (
-                http.client.IncompleteRead,
-                http.client.RemoteDisconnected,
-                OSError,
-                TimeoutError,
-                ValueError,
-                socket.timeout,
-                urllib.error.URLError,
-            ) as exc:
+            except (http.client.IncompleteRead, http.client.RemoteDisconnected, OSError, TimeoutError, ValueError, urllib.error.URLError) as exc:
                 status = 502
                 print(
-                    "embedding upstream transport failure: "
-                    f"inputs={len(inputs)} chars={sum(len(value) for value in inputs)} "
-                    f"type={type(exc).__name__}",
+                    f"embedding upstream transport failure: inputs={len(inputs)} chars={sum(len(value) for value in inputs)} type={type(exc).__name__}",
                     file=sys.stderr,
                     flush=True,
                 )
@@ -221,7 +203,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=18082)
-    parser.add_argument("--upstream", default="https://service.example.invalid")
+    parser.add_argument("--upstream", default="https://service.example.invalid/v1")
     parser.add_argument("--api-key-env", default="EXAMPLE_EMBEDDING_API_KEY")
     # Eight source-sized inputs are accepted by the gateway.
     parser.add_argument("--max-batch-inputs", type=int, default=8)

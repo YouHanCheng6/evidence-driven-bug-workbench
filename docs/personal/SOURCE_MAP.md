@@ -8,13 +8,15 @@
 | 状态 | `bug_workflow_state.py` | 定义持久阶段、恢复点、终态和错误投影 |
 | 数据契约 | `bug_workflow_models.py` | 工单、报告、HTTP 投影和历史兼容字段 |
 | 输入准备 | `bug_investigator.py` | 整理规范工单、附件事实和确定性调查包，不充当第二个调查 Agent |
+| 视觉事实 | `bug_attachment_evidence.py` | 独立、临时、无工具 Codex 截图转写；公开版已去除旧视觉模型实现 |
 | 平台规则 | `bug_runtime_source_policy.py` | 平台/仓库范围与运行时源码策略 |
 | 源码视图 | `bug_source_view.py` | 构建过滤后的当前 checkout 只读视图 |
-| 候选检索 | `bug_source_retrieval.py` | Tabby 查询、候选平衡、精确片段复核和数量上限 |
+| 候选检索 | `bug_source_retrieval.py` | 各检索通道独立排序后按文件融合、产品族共识和精确片段复核 |
 | 文件历史 | `bug_git_history_runtime.py` | 已验证入口的单文件、限次数 Git 历史查询 |
 | Codex 会话 | `bug_codex_summary.py` | 启动单个只读会话、组装提示词、校验四段报告 |
+| 示例 WIKI 接口 | `bug_codex_summary.py` | `ExampleWikiMcp`：假设门控、八工具白名单、运行时凭据和责任一致性校验 |
 | 修改建议 | `bug_change_advice.py` | 解析并约束第四节建议，不执行修改 |
-| 可选日志 | `bug_log_query_runtime.py` | 准备有边界的日志上下文 |
+| 可选日志 | `bug_log_expert.py`、`bug_log_query_runtime.py` | 流式私有索引、有界完整成员集合、确认与未核验事实分层 |
 | 私有规则接口 | `bug_business_knowledge.py` | 运行时读取外部业务规则；公开仓库不承载实际规则 |
 | 批次选择 | `main_agent_bug_selection.py` | 精确选择、保存及当前请求覆盖规则 |
 | 批次执行 | `main_agent_bug_batch.py` | 按序运行、持久化和恢复 |

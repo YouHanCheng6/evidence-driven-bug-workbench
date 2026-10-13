@@ -16,6 +16,7 @@ _CLIENTS = frozenset({"android", "ios", "harmony"})
 _RNSDK_CONTAINER_ROOT = "/mnt/repos/sample_mobile_repo"
 _HARMONY_CONTAINER_ROOT = "/mnt/repos/sample_platform_repo"
 
+
 @dataclass(frozen=True)
 class InvestigationKnowledgeContext:
     """Deterministic ticket facts and repository scope supplied to Codex."""
@@ -63,11 +64,7 @@ class InvestigationKnowledgeContext:
         del active_target
         return {
             "investigation_mode": self.investigation_mode(),
-            "query_facts": {
-                key: value
-                for key, value in self.query_facts.items()
-                if key not in {"ticket_texts", "visual_descriptions"}
-            },
+            "query_facts": {key: value for key, value in self.query_facts.items() if key not in {"ticket_texts", "visual_descriptions"}},
             "recommended_starting_points": [],
             "business_knowledge": self.business_knowledge,
         }
@@ -130,11 +127,7 @@ def compact_visual_evidence(attachment_evidence: Mapping[str, Any] | None) -> di
         for reference in item.get("evidence_refs", []) if isinstance(item.get("evidence_refs"), list) else []:
             if not isinstance(reference, Mapping):
                 continue
-            bounded_ref = {
-                key: _bounded_text(reference.get(key), limit=160)
-                for key in ("asset", "role", "annotation")
-                if reference.get(key) not in (None, "")
-            }
+            bounded_ref = {key: _bounded_text(reference.get(key), limit=160) for key in ("asset", "role", "annotation") if reference.get(key) not in (None, "")}
             if bounded_ref:
                 refs.append(bounded_ref)
             if len(refs) >= 4:
@@ -280,9 +273,29 @@ def _clean_investigation_focus(raw_focus: Mapping[str, Any] | None) -> dict[str,
 
 
 _TICKET_ACTION_VERBS = (
-    "点击", "长按", "滑动", "进入", "打开", "返回", "连接", "选择", "开启", "关闭",
-    "提交", "保存", "绑定", "解绑", "登录", "退出", "添加", "删除", "修改", "播放",
-    "暂停", "解锁", "开锁",
+    "点击",
+    "长按",
+    "滑动",
+    "进入",
+    "打开",
+    "返回",
+    "连接",
+    "选择",
+    "开启",
+    "关闭",
+    "提交",
+    "保存",
+    "绑定",
+    "解绑",
+    "登录",
+    "退出",
+    "添加",
+    "删除",
+    "修改",
+    "播放",
+    "暂停",
+    "解锁",
+    "开锁",
 )
 
 
@@ -387,7 +400,6 @@ def _knowledge_query_facts(
         ),
     }
     return {key: value for key, value in facts.items() if value}
-
 
 
 def build_investigation_knowledge_context(

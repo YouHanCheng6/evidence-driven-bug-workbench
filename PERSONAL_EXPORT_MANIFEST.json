@@ -1,7 +1,7 @@
 {
   "schema_version": 3,
   "edition": "sanitized personal customization showcase",
-  "export_date": "2026-09-28",
+  "export_date": "2026-10-13",
   "public_base_commit": "88252e9b318d34e7e1867155ad2c77993320788e",
   "source": "author-requested sanitized snapshot of current source files; original Agent workspace remains untouched",
   "runtime_verified": false,
@@ -51,9 +51,10 @@
     {
       "path": "backend/app/gateway/bug_attachment_evidence.py",
       "source_state": "tracked_worktree",
-      "lines": 995,
-      "redactions": 0,
-      "sha256": "6c998150e7f50bd42bd03bcfb322a932ca55d98abbd0e34b25448b80de7661ee"
+      "lines": 996,
+      "sha256": "97f10003a02a41cde58104a0d6f6c1c086d48d186fe4af877b63a679f653b7b8",
+      "snapshot_date": "2026-10-13",
+      "sanitization": "Reviewed example identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_business_knowledge.py",
@@ -72,9 +73,10 @@
     {
       "path": "backend/app/gateway/bug_codex_summary.py",
       "source_state": "untracked",
-      "lines": 372,
-      "redactions": 4,
-      "sha256": "0abbb2369ad65da28bd884cebe815feec7910a9f9dc659e6b1a9bfea607c26b3"
+      "lines": 597,
+      "sha256": "915594135d18b6d1a38bf7bc27833d00db188c2ebef240d2f74a1c3b59f51f10",
+      "snapshot_date": "2026-10-13",
+      "sanitization": "Reviewed example identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_git_history_runtime.py",
@@ -86,23 +88,26 @@
     {
       "path": "backend/app/gateway/bug_investigator.py",
       "source_state": "tracked_worktree",
-      "lines": 430,
-      "redactions": 2,
-      "sha256": "04123f91905d88fa5a5e04491a01afbd38958afd2b58753b3335bc893c46e78c"
+      "lines": 442,
+      "sha256": "5dc319dd13d29708599ee1f21f364782f12dea1d59e6db584f4b5b7014b3fc0f",
+      "snapshot_date": "2026-10-13",
+      "sanitization": "Reviewed example identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_log_expert.py",
       "source_state": "tracked_worktree",
-      "lines": 803,
-      "redactions": 0,
-      "sha256": "aca2e22e955dc771b19b52e32551036cc42b38851d4cf6d79798ef54b5daaacd"
+      "lines": 965,
+      "sha256": "91b1c4176b3d1deebf2aee5f0d1da72572cdc4a2cd6d3551fb337d0d42c3057d",
+      "snapshot_date": "2026-10-13",
+      "sanitization": "Reviewed example identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_log_query_runtime.py",
       "source_state": "untracked",
-      "lines": 168,
-      "redactions": 0,
-      "sha256": "cdc0a2246cac0e39d61acb8bb598a88214c7adfc744af0b225f035c964178af8"
+      "lines": 305,
+      "sha256": "832eebe62113af529b762b251feab3c8ec8c207a5db4c77274b0fd406fd54de6",
+      "snapshot_date": "2026-10-13",
+      "sanitization": "Reviewed example identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_rollback.py",
@@ -128,9 +133,10 @@
     {
       "path": "backend/app/gateway/bug_source_retrieval.py",
       "source_state": "untracked",
-      "lines": 1951,
-      "redactions": 15,
-      "sha256": "ccf3a4feffb23f903efce96b3e4517d49a8c5fe88151a152939d5a7fe00e689e"
+      "lines": 2589,
+      "sha256": "3fac509701a812fa6fbb1a75f2938bd87d2c722cdb81006ea0ca664636a11bbf",
+      "snapshot_date": "2026-10-13",
+      "sanitization": "Reviewed example identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_source_view.py",
@@ -142,16 +148,18 @@
     {
       "path": "backend/app/gateway/bug_triage.py",
       "source_state": "tracked_worktree",
-      "lines": 261,
-      "redactions": 0,
-      "sha256": "d93fc0b9d1ce1b05055728a1b7073812c7fbc4410b6909245460e1bdbbc7d88c"
+      "lines": 251,
+      "sha256": "06fdec0dd8b5aa2966d3c797479a265dc3356e9c12bb8f43f3551bd1955f8587",
+      "snapshot_date": "2026-10-13",
+      "sanitization": "Reviewed example identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_workflow.py",
       "source_state": "tracked_worktree",
-      "lines": 2097,
-      "redactions": 27,
-      "sha256": "0c99a36d14c1c20a1ff1c6658154fbfe39f2b8c76832e234b7f2a7e2333242ee"
+      "lines": 2130,
+      "sha256": "a55d692147a5b990b7a9464105acab01b012e8b114a6a414b9a3187db299cac3",
+      "snapshot_date": "2026-10-13",
+      "sanitization": "Reviewed example identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_workflow_events.py",
@@ -247,7 +255,7 @@
     {
       "path": "backend/packages/harness/deerflow/agents/memory/summarization_hook.py",
       "source_state": "tracked_worktree",
-      "lines": 29,
+      "lines": 34,
       "redactions": 0,
       "sha256": "f5bb52e6d4f4084633d3943449f4f052308b983a6196823a49e263998c9ef058"
     },
@@ -345,9 +353,10 @@
     {
       "path": "backend/packages/harness/deerflow/config/bug_analysis_config.py",
       "source_state": "tracked_worktree",
-      "lines": 109,
-      "redactions": 1,
-      "sha256": "b422495dad6f0a5fe9f9a95d24ce4416ca28973650929ba6caef555c2ac21654"
+      "lines": 120,
+      "sha256": "f183ba833b7c7505408c62da891b24d928ec316b938372b2b0055c4fc942df61",
+      "snapshot_date": "2026-10-13",
+      "sanitization": "Reviewed example identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/packages/harness/deerflow/models/factory.py",
@@ -534,16 +543,18 @@
     {
       "path": "backend/scripts/bug_workflow/evaluate_tabby_retrieval.py",
       "source_state": "untracked",
-      "lines": 207,
-      "redactions": 16,
-      "sha256": "52a2eb9b01b1d20dbfec014fcd7c11f0d3addd347e9973e0bd15341362226f3e"
+      "lines": 213,
+      "sha256": "38afa7bf1ea1c3ef25d8ffd9699dd12013401f50a4e0cfccdf99a091bd945de5",
+      "snapshot_date": "2026-10-13",
+      "sanitization": "Reviewed example identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/scripts/bug_workflow/prepare_tabby_repositories.py",
       "source_state": "untracked",
-      "lines": 148,
-      "redactions": 12,
-      "sha256": "f82a1d43db0dd37c4660e7601dc5accd4f93070fc73ad4d2debb4a6d4d268555"
+      "lines": 222,
+      "sha256": "7f65d6af4ed5efa1281e321ec539eccb44d0b4d7ae01ec09c2fc4b068f0f0764",
+      "snapshot_date": "2026-10-13",
+      "sanitization": "Reviewed example identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/scripts/bug_workflow/run_tabby_context.py",
@@ -555,9 +566,10 @@
     {
       "path": "backend/scripts/bug_workflow/tabby_embedding_gateway.py",
       "source_state": "untracked",
-      "lines": 251,
-      "redactions": 4,
-      "sha256": "2bb2ace495a3c39e0d7720f97d1d6f01e7553e7f2a913e55963277f109acb4ba"
+      "lines": 233,
+      "sha256": "6f7f2dfb4e972192fdceddea275da929a4aa754733eba4a3422101b81b1ab976",
+      "snapshot_date": "2026-10-13",
+      "sanitization": "Reviewed example identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/scripts/bug_workflow/tabby_noop_completion.py",
@@ -576,9 +588,10 @@
     {
       "path": "config.example.yaml",
       "source_state": "tracked_worktree",
-      "lines": 2649,
-      "redactions": 33,
-      "sha256": "829804ae0571c54aabb8929036f6fd1fc7675632d8cdda024ea90a8b25e4db45"
+      "lines": 2653,
+      "sha256": "532d20fdbd65d535049c89ece7d461e514f63e412accc3308eb6e3400b2411f2",
+      "snapshot_date": "2026-10-13",
+      "sanitization": "Reviewed example identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "extensions_config.example.json",
@@ -604,7 +617,7 @@
     {
       "path": "frontend/src/app/layout.tsx",
       "source_state": "tracked_worktree",
-      "lines": 34,
+      "lines": 29,
       "redactions": 4,
       "sha256": "80be027a1805735428b190cf2832e3dff2e0731b8b8f354380960fc01accf9ed"
     },
@@ -769,5 +782,11 @@
       "redactions": 0,
       "sha256": "9c3252a28bc7725cc9a0642f1daeed9eab7838608bf26ee750d922035e058a70"
     }
+  ],
+  "scope_note": "Incremental Bug Workbench refresh; independent railway, exam and mini-program applications excluded.",
+  "showcase_adjustments": [
+    "Enterprise names, repository conventions, WIKI adapter names and connection fields replaced by fictional examples.",
+    "Retired visual-model implementation removed at author request; Codex visual extraction retained.",
+    "No runtime credentials, knowledge content, source mirrors, tickets or log indexes included."
   ]
 }

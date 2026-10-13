@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Build private composite Git repositories for Tabby source retrieval.
 
-The sample_mobile_repo checkout contains ignored Android and iOS Git repositories.
-Tabby's repository APIs read a commit tree, so a sparse parent clone cannot
-expose those native sources. This script creates a private synthetic commit
-from tracked source files in all three checkouts while preserving their paths.
-Developer checkouts are never modified.
+The application checkouts contain ignored native and product Git repositories.
+Tabby's repository APIs read a commit tree, so a parent clone cannot expose
+those nested sources. This script creates a private synthetic commit from
+tracked source files in every current nested checkout while preserving their
+paths. Developer checkouts are never modified.
 """
 
 from __future__ import annotations
@@ -22,40 +22,68 @@ _RUNTIME_SOURCE_POLICY = runpy.run_path(str(_BACKEND_ROOT / "app/gateway/bug_run
 discover_tracked_runtime_dist_roots = _RUNTIME_SOURCE_POLICY["discover_tracked_runtime_dist_roots"]
 path_is_in_runtime_dist = _RUNTIME_SOURCE_POLICY["path_is_in_runtime_dist"]
 
-_SOURCE_DIRS = frozenset({"modules", "projects", "resources", "ydsdk", "rnlibs", "chargerPlugin", "moduleControl"})
+_SOURCE_DIRS = frozenset({"modules", "projects", "resources", "sample_sdk", "rnlibs", "samplePlugin", "moduleControl"})
 _EXCLUDED_DIRS = frozenset(
     {
-        ".git", ".gradle", ".idea", ".kotlin", ".run", ".vscode", "DerivedData", "Pods",
-        "build", "dist", "docs", "jniLibs", "maven-repo", "memory-bank", "node_modules",
-        "openspec", "specs", "vosk-model",
+        ".git",
+        ".gradle",
+        ".idea",
+        ".kotlin",
+        ".run",
+        ".vscode",
+        "DerivedData",
+        "Pods",
+        "build",
+        "dist",
+        "docs",
+        "jniLibs",
+        "maven-repo",
+        "memory-bank",
+        "node_modules",
+        "openspec",
+        "specs",
+        "vosk-model",
     }
 )
 _EXCLUDED_SUFFIXES = frozenset(
     {
-        ".a", ".aar", ".apk", ".class", ".docx", ".dylib", ".gif", ".ipa", ".jar",
-        ".jpeg", ".jpg", ".jks", ".keystore", ".log", ".md", ".mp3", ".mp4", ".png",
-        ".snap", ".so", ".tgz", ".wav", ".webp", ".zip",
+        ".a",
+        ".aar",
+        ".apk",
+        ".class",
+        ".docx",
+        ".dylib",
+        ".gif",
+        ".ipa",
+        ".jar",
+        ".jpeg",
+        ".jpg",
+        ".jks",
+        ".keystore",
+        ".log",
+        ".md",
+        ".mp3",
+        ".mp4",
+        ".png",
+        ".snap",
+        ".so",
+        ".tgz",
+        ".wav",
+        ".webp",
+        ".zip",
     }
 )
 _EXCLUDED_NAMES = frozenset({"api-secrets.properties", "local.properties", "package-lock.json", "proguardMapping.txt"})
 
 
 def _run(*args: str, cwd: Path | None = None, timeout: int = 300) -> str:
-    completed = subprocess.run(
-        list(args), cwd=cwd, check=True, capture_output=True, text=True, timeout=timeout
-    )
+    completed = subprocess.run(list(args), cwd=cwd, check=True, capture_output=True, text=True, timeout=timeout)
     return completed.stdout.strip()
 
 
 def _tracked_files(root: Path) -> list[Path]:
-    completed = subprocess.run(
-        ["git", "ls-files", "-z"], cwd=root, check=True, capture_output=True, timeout=300
-    )
-    return [
-        Path(value.decode("utf-8", errors="surrogateescape"))
-        for value in completed.stdout.split(b"\0")
-        if value
-    ]
+    completed = subprocess.run(["git", "ls-files", "-z"], cwd=root, check=True, capture_output=True, timeout=300)
+    return [Path(value.decode("utf-8", errors="surrogateescape")) for value in completed.stdout.split(b"\0") if value]
 
 
 def _allowed(path: Path, *, parent: bool, runtime_dist_roots: frozenset[Path]) -> bool:
@@ -104,24 +132,63 @@ def _copy_tracked(source: Path, destination: Path, *, prefix: Path | None, paren
     return copied
 
 
-def _prepare(source: Path, destination: Path, *, include_native: bool) -> tuple[int, dict[str, str]]:
+def _nested_source_repositories(
+    source: Path,
+    *,
+    native_directories: tuple[str, ...],
+    include_product_repositories: bool,
+) -> list[tuple[Path, Path]]:
+    """Return independent source Git roots that the parent commit cannot see."""
+    candidates = [source / name for name in native_directories]
+    projects = source / "projects"
+    if include_product_repositories and projects.is_dir():
+        candidates.extend(sorted(projects.glob("com.example.*")))
+    repositories: list[tuple[Path, Path]] = []
+    for candidate in candidates:
+        if not candidate.is_dir():
+            continue
+        try:
+            repository_root = Path(_run("git", "rev-parse", "--show-toplevel", cwd=candidate)).resolve()
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if repository_root != candidate.resolve():
+            continue
+        repositories.append((candidate.relative_to(source), candidate))
+    return repositories
+
+
+def _prepare(
+    source: Path,
+    destination: Path,
+    *,
+    native_directories: tuple[str, ...],
+    include_product_repositories: bool,
+) -> tuple[int, dict[str, str]]:
     _reset_generated_tree(destination)
     revisions = {"main": _run("git", "rev-parse", "HEAD", cwd=source)}
     count = _copy_tracked(source, destination, prefix=None, parent=True)
-    if include_native:
-        for name in ("android", "ios"):
-            nested = source / name
-            if not (nested / ".git").exists():
-                continue
-            revisions[name] = _run("git", "rev-parse", "HEAD", cwd=nested)
-            count += _copy_tracked(nested, destination, prefix=Path(name), parent=False)
-    (destination / ".source-revisions.json").write_text(
-        json.dumps(revisions, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8"
-    )
+    for prefix, nested in _nested_source_repositories(
+        source,
+        native_directories=native_directories,
+        include_product_repositories=include_product_repositories,
+    ):
+        key = prefix.as_posix()
+        revisions[key] = _run("git", "rev-parse", "HEAD", cwd=nested)
+        count += _copy_tracked(nested, destination, prefix=prefix, parent=False)
+    (destination / ".source-revisions.json").write_text(json.dumps(revisions, ensure_ascii=False, sort_keys=True, indent=2) + "\n", encoding="utf-8")
     _run("git", "add", "-A", cwd=destination)
     _run(
-        "git", "-c", "user.name=DeerFlow Runtime", "-c", "user.email=runtime@localhost",
-        "commit", "--quiet", "--allow-empty", "-m", "Refresh private Tabby source corpus", cwd=destination,
+        "git",
+        "-c",
+        "user.name=DeerFlow Runtime",
+        "-c",
+        "user.email=runtime@localhost",
+        "commit",
+        "--quiet",
+        "--allow-empty",
+        "-m",
+        "Refresh private Tabby source corpus",
+        cwd=destination,
     )
     return count, revisions
 
@@ -129,17 +196,24 @@ def _prepare(source: Path, destination: Path, *, include_native: bool) -> tuple[
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-root", type=Path, default=Path(".deer-flow/tabby/composite-repositories"))
-    parser.add_argument("--sample_mobile_repo", type=Path, default=Path("/home/example_user Workbench/projects/sample_mobile_repo"))
-    parser.add_argument("--harmony-rn", type=Path, default=Path("/home/example_user Workbench/sample_platform_repo"))
+    parser.add_argument("--sample_mobile_repo", type=Path, default=Path("/home/example_user/projects/sample_mobile_repo"))
+    parser.add_argument("--sample-platform-repo", type=Path, default=Path("/home/example_user/sample_platform_repo"))
     args = parser.parse_args()
     output_root = args.output_root.expanduser().resolve()
-    for name, source, include_native in (
-        ("sample_mobile_repo", args.sample_mobile_repo, True), ("sample_platform_repo", args.sample_platform_repo, False)
-    ):
+    repository_families = (
+        ("sample_mobile_repo", args.sample_mobile_repo, ("android", "ios"), True),
+        ("sample_platform_repo", args.sample_platform_repo, ("harmony",), False),
+    )
+    for name, source, native_directories, include_product_repositories in repository_families:
         source = source.expanduser().resolve()
         if not (source / ".git").exists():
             raise SystemExit(f"repository checkout missing: {source}")
-        count, revisions = _prepare(source, output_root / name, include_native=include_native)
+        count, revisions = _prepare(
+            source,
+            output_root / name,
+            native_directories=native_directories,
+            include_product_repositories=include_product_repositories,
+        )
         print(f"prepared {name}: files={count} revisions={len(revisions)} path={output_root / name}")
     return 0
 
