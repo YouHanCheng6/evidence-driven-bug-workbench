@@ -19,19 +19,17 @@ from zentao_mcp.client import ZentaoClient, ZentaoError
 from app.gateway.auth_disabled import AUTH_SOURCE_INTERNAL
 from app.gateway.bug_attachment_evidence import collect_bug_attachment_evidence
 from app.gateway.bug_business_knowledge import matched_retrieval_aliases, recall_business_rules
-from app.gateway.bug_codex_summary import (
-    investigate_bug_with_codex,
-    require_codex_runtime,
-)
+from app.gateway.bug_codex_summary import investigate_bug_with_codex
 from app.gateway.bug_investigator import (
     InvestigationKnowledgeContext,
     build_investigation_knowledge_context,
     compact_visual_evidence,
 )
 from app.gateway.bug_log_expert import collect_log_material, run_log_expert
-from app.gateway.bug_log_query_runtime import LOG_CACHE_DIRECTORY
+from app.gateway.bug_log_query_runtime import LOG_QUERY_SCRIPT
+from app.gateway.bug_note_repair import note_repair_result, prepare_note_repair
 from app.gateway.bug_source_retrieval import build_source_retrieval
-from app.gateway.bug_source_view import materialize_bug_source_view
+from app.gateway.bug_source_view import LOG_CACHE_DIRECTORY, materialize_bug_source_view
 from app.gateway.bug_triage import apply_visual_copy_evidence, select_relevant_assets, unknown_triage
 from app.gateway.bug_workflow_state import BugWorkflowRuntime, BugWorkflowState
 from app.gateway.deps import get_thread_store
@@ -47,7 +45,6 @@ _HANDOFF_SOURCE_REF_PATTERN = re.compile(
     r"(?:[A-Za-z0-9_.@+-]+/)+[A-Za-z0-9_.@+-]+\.[A-Za-z0-9]+))"
     r"(?::(?P<line>\d+))?"
 )
-_RUNTIME_PRE_SCAN_RULE_VERSION = "runtime-pre-scan-v7"
 _KNOWN_SOURCE_REPOSITORY_PREFIXES = ("sample_platform_repo/", "sample_mobile_repo/")
 _TERMINAL_ZENTAO_STATUS_LABELS = {
     "resolved": "已解决",
@@ -293,10 +290,6 @@ def _codex_ticket_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
     return retained
 
 
-_TICKET_SECTION_PATTERN = re.compile(r"[\[【](?P<label>预置条件|前置条件|测试步骤|操作步骤|复现步骤|预期结果|期望结果|实际结果|实测结果|测试结果|恢复方法|问题恢复方法|重现概率|复现概率)[\]】]")
-_NUMBERED_FACT_PATTERN = re.compile(r"(?:^|[\s；;])(?P<number>\d{1,2})[、.．)]\s*(?P<text>.+?)(?=(?:[\s；;]+\d{1,2}[、.．)])|$)")
-
-
 def _bug_client_scope_text(snapshot: dict[str, Any]) -> str:
     """Use reporter/runtime facts for client scope, never development ownership."""
     return " ".join(str(snapshot.get(field, "")) for field in _BUG_SNAPSHOT_FIELDS if field != "module" and snapshot.get(field) not in (None, ""))
@@ -319,6 +312,15 @@ def detect_affected_clients(snapshot: dict[str, Any]) -> tuple[str, ...]:
 def detect_reported_clients(snapshot: dict[str, Any]) -> tuple[str, ...]:
     """Derive ticket-reported clients without consulting the development module label."""
     return detect_affected_clients(snapshot)
+
+
+def _module_repository_family(module: str) -> Literal["classic_mobile", "harmony"] | None:
+    """Resolve a repository family only from an unambiguous ZenTao module."""
+    has_harmony = bool(re.search(r"鸿蒙|harmony", module, re.IGNORECASE))
+    has_classic = bool(re.search(r"android|安卓|ios|苹果", module, re.IGNORECASE))
+    if has_harmony == has_classic:
+        return None
+    return "harmony" if has_harmony else "classic_mobile"
 
 
 def _platform_fact_choices(snapshot: Mapping[str, Any]) -> tuple[dict[str, dict[str, str]], str]:
@@ -362,12 +364,11 @@ async def _run_platform_resolution(
     if not choices:
         raise ValueError("工单没有可用于确认复现端的 module、设备或正文事实")
     module = str(snapshot.get("module") or "")
-    module_is_harmony = bool(re.search(r"鸿蒙|harmony", module, re.IGNORECASE))
-    module_is_classic = bool(re.search(r"android|安卓", module, re.IGNORECASE) and re.search(r"ios|苹果", module, re.IGNORECASE))
-    repository_family = "harmony" if module_is_harmony else "classic_mobile"
+    module_repository_family = _module_repository_family(module)
     client_choices = {evidence_id: item for evidence_id, item in choices.items() if item["source"] != "module"}
     client_choice_text = "\n".join(json.dumps(item, ensure_ascii=False) for item in client_choices.values())
     repository_ids = tuple(evidence_id for evidence_id, item in choices.items() if item["source"] == "module")
+    literal_client_evidence: dict[str, tuple[str, ...]] = {client: tuple(evidence_id for evidence_id, item in client_choices.items() if client in _clients_in_text(item["quote"])) for client in ("android", "ios", "harmony")}
 
     def module_fallback(
         *,
@@ -376,16 +377,16 @@ async def _run_platform_resolution(
         model_call_count: int,
         model_attempts: Sequence[Mapping[str, Any]] = (),
     ) -> PlatformResolution:
-        if not module.strip() or not repository_ids:
+        if module_repository_family is None or not repository_ids:
             raise ValueError("工单没有可用于 module 降级的仓库家族事实")
-        fallback_mode: Literal["classic_shared_unknown", "harmony"] = "harmony" if repository_family == "harmony" else "classic_shared_unknown"
+        fallback_mode: Literal["classic_shared_unknown", "harmony"] = "harmony" if module_repository_family == "harmony" else "classic_shared_unknown"
         return PlatformResolution(
             reported_clients=(),
-            repository_family=repository_family,
-            primary_repository="sample_platform_repo" if repository_family == "harmony" else "sample_mobile_repo",
+            repository_family=module_repository_family,
+            primary_repository="sample_platform_repo" if module_repository_family == "harmony" else "sample_mobile_repo",
             investigation_mode=fallback_mode,
             client_scope_status="module_fallback",
-            candidate_implementation_layers=("harmony_native", "sample_platform_repo") if repository_family == "harmony" else ("android_native", "ios_native", "shared_rn"),
+            candidate_implementation_layers=("harmony_native", "sample_platform_repo") if module_repository_family == "harmony" else ("android_native", "ios_native", "shared_rn"),
             client_evidence={},
             evidence=tuple(dict(choices[evidence_id]) for evidence_id in repository_ids),
             reason="工单未提供可确认具体复现端的设备或系统事实，已按 module 降级确定仓库家族；具体客户端保持未知。",
@@ -411,12 +412,12 @@ async def _run_platform_resolution(
             ),
             "reported_clients 只能包含 android、ios、harmony。根据设备型号与系统理解任意新设备，不要依赖固定品牌清单；若所有事实都不能确认具体客户端，必须返回空数组和空 client_evidence_ids，后端将按 module 降级。",
             (
-                "后端已仅根据 Harmony module 确定仓库家族；module 不证明 Harmony 实际复现，不能作为客户端证据，也不要增加 android 或 ios。"
-                if repository_family == "harmony"
-                else "后端已仅根据 module 确定仓库家族为 classic_mobile；module 不在下方复现事实中，也绝不能增加 reported_clients。"
+                "后端已根据明确的 module 锁定主仓库家族；module 不证明实际复现端。下方事实若明确包含其他家族客户端，仍须如实输出为共同复现端，不能用它改写主仓库。"
+                if module_repository_family is not None
+                else "module 无法确定主仓库；必须只根据下方事实确认复现端，后端将据此选择唯一仓库家族。"
             ),
             "每个输出客户端必须在 client_evidence_ids 中分别引用至少一条本身能证明该客户端复现的事实；同一条 Android 设备事实不能证明 iOS，反之亦然。",
-            "Android 与 iOS 设备都明确出现时才同时输出 android、ios。单端复现仍可能属于共享 RN，本调用不要据此扩大复现端或判断实现层。Harmony 不能与 android/ios 混合输出。",
+            "不同客户端都被明确描述为复现端时须全部输出，包括 Harmony 与 Android/iOS 共同复现；比较对象、预期参照和顺带提及的客户端不能算作复现端。本调用不要判断实现层。",
             "可用于确认复现端的工单事实编号：",
             client_choice_text,
         )
@@ -500,22 +501,11 @@ async def _run_platform_resolution(
             model_call_count=len(model_attempts),
             model_attempts=model_attempts,
         )
-    order = ("android", "ios", "harmony")
-    clients = tuple(client for client in order if client in normalized_clients)
-    if "harmony" in clients and len(clients) != 1:
-        raise ValueError("Harmony 复现端不能与 Android/iOS 混合")
-
-    expected_family = "harmony" if clients == ("harmony",) else "classic_mobile"
-    if repository_family != expected_family:
-        raise ValueError("端确认模型返回的复现端与 module 仓库家族冲突")
-    if module_is_harmony and expected_family != "harmony":
-        raise ValueError("module 明确为鸿蒙，但模型没有确认 Harmony")
-    if module_is_classic and expected_family != "classic_mobile":
-        raise ValueError("module 明确为 Android&iOS，但模型选择了 Harmony")
-
     raw_client_evidence = payload.get("client_evidence_ids")
     if not isinstance(raw_client_evidence, Mapping):
         raise ValueError("端确认模型没有逐客户端返回 client_evidence_ids")
+    order = ("android", "ios", "harmony")
+    clients = tuple(client for client in order if client in normalized_clients)
     client_evidence: dict[str, tuple[str, ...]] = {}
     for client in clients:
         raw_ids = raw_client_evidence.get(client)
@@ -525,17 +515,38 @@ async def _run_platform_resolution(
         client_evidence[client] = evidence_ids
     if any(str(key) not in clients for key in raw_client_evidence):
         raise ValueError("client_evidence_ids 包含未输出的客户端")
-    evidence_ids = tuple(dict.fromkeys(evidence_id for ids in client_evidence.values() for evidence_id in ids))
-    evidence = tuple(dict(choices[evidence_id]) for evidence_id in (*repository_ids, *evidence_ids))
 
-    if clients == ("android", "ios"):
+    client_families = {"harmony" if client == "harmony" else "classic_mobile" for client in clients}
+    repository_family: Literal["classic_mobile", "harmony"]
+    if module_repository_family is not None:
+        if module_repository_family not in client_families:
+            supporting_clients = tuple(client for client in order if ("harmony" if client == "harmony" else "classic_mobile") == module_repository_family and literal_client_evidence[client])
+            if not supporting_clients:
+                raise ValueError("端确认模型返回的复现端与 module 仓库家族冲突")
+            for client in supporting_clients:
+                client_evidence[client] = literal_client_evidence[client]
+            clients = tuple(client for client in order if client in client_evidence)
+        repository_family = module_repository_family
+    else:
+        if len(client_families) != 1:
+            raise ValueError("module 无法确定仓库且正文同时确认了不同仓库家族的复现端")
+        repository_family = next(iter(client_families))
+
+    evidence_ids = tuple(dict.fromkeys(evidence_id for ids in client_evidence.values() for evidence_id in ids))
+    repository_evidence_ids = repository_ids if module_repository_family is not None else ()
+    evidence = tuple(dict(choices[evidence_id]) for evidence_id in (*repository_evidence_ids, *evidence_ids))
+
+    repository_clients = tuple(client for client in clients if ("harmony" if client == "harmony" else "classic_mobile") == repository_family)
+    if repository_family == "harmony":
+        mode: Literal["android", "ios", "android_ios_shared", "harmony"] = "harmony"
+    elif repository_clients == ("android", "ios"):
         mode: Literal["android", "ios", "android_ios_shared", "harmony"] = "android_ios_shared"
-    elif clients == ("android",):
+    elif repository_clients == ("android",):
         mode = "android"
-    elif clients == ("ios",):
+    elif repository_clients == ("ios",):
         mode = "ios"
     else:
-        mode = "harmony"
+        raise ValueError("classic_mobile 仓库没有可用的 Android/iOS 复现端")
     candidate_layers = {
         "android": ("android_native", "shared_rn"),
         "ios": ("ios_native", "shared_rn"),
@@ -545,8 +556,8 @@ async def _run_platform_resolution(
     reason = re.sub(r"\s+", " ", str(payload.get("reason") or "")).strip()[:500]
     return PlatformResolution(
         reported_clients=clients,
-        repository_family=expected_family,
-        primary_repository="sample_platform_repo" if expected_family == "harmony" else "sample_mobile_repo",
+        repository_family=repository_family,
+        primary_repository="sample_platform_repo" if repository_family == "harmony" else "sample_mobile_repo",
         investigation_mode=mode,
         client_scope_status="explicit",
         candidate_implementation_layers=candidate_layers,
@@ -581,6 +592,8 @@ def _public_bug_workflow_error(failure_kind: str, technical_error: str) -> str:
         return "Bug Workbench 已完成并保留分析，但禅道备注未能生成；可直接重试备注，无需重新调查"
     if failure_kind == "note_write_failed":
         return "Bug Workbench 已完成并保留分析及备注内容，但禅道写入或回读未确认；可直接重试写入，无需重新调查"
+    if failure_kind == "repair_execution_failed":
+        return "分析和已确认备注仍保留，但按备注修改代码未能完成，请查看修改结果"
     logger.debug("Hidden Bug workflow technical error: %s", technical_error)
     return "Bug Workbench 自动分析未能完成，请查看服务日志或稍后重试"
 
@@ -809,31 +822,14 @@ def _build_video_clarification(videos: Sequence[Mapping[str, Any]]) -> dict[str,
     }
 
 
-def _runtime_log_time_hints(snapshot: Mapping[str, Any]) -> list[str]:
-    """Extract explicit ticket date/minute hints without inferring a time window."""
-    # Reporter facts only: server timestamps and firmware versions are not
-    # reproduction times. Unicode word boundaries fail next to Chinese text.
-    text = "\n".join(str(snapshot.get(key) or "") for key in ("description", "steps", "actual", "expected", "title"))
-    hints: list[str] = []
-    for value in re.findall(r"(?<!\d)20\d{2}[-/]\d{1,2}[-/]\d{1,2}(?!\d)", text):
-        year, month, day = re.split(r"[-/]", value)
-        value = f"{year}-{int(month):02d}-{int(day):02d}"
-        if value not in hints:
-            hints.append(value)
-    time_text = re.sub(r"(?<![\d.])\d+(?:\.\d+){2,}(?![\d.])", "", text)
-    # A dot-separated minute is ambiguous with versions: only accept it after
-    # an explicit testing/event time label. Colon times remain usable in prose.
-    times = re.findall(r"(?:测试时间|复现时间|事件时间|时间)[^\n\d]{0,16}([01]?\d|2[0-3])\.([0-5]\d)", time_text)
-    times.extend(re.findall(r"(?<![\d.:])([01]?\d|2[0-3])[:：]([0-5]\d)(?:[:：][0-5]\d)?(?![\d.:])", time_text))
-    for hour, minute in times:
-        compact = f"{int(hour):02d}:{minute}"
-        if compact not in hints:
-            hints.append(compact)
-    return hints[:4]
+@dataclass(frozen=True)
+class TicketRuntimeSignals:
+    values: tuple[str, ...]
+    device_identities: tuple[str, ...]
 
 
-def _ticket_runtime_signals(snapshot: Mapping[str, Any]) -> list[str]:
-    """Extract only structured identifiers from ticket facts for the pre-scan."""
+def classify_ticket_runtime_signals(snapshot: Mapping[str, Any]) -> TicketRuntimeSignals:
+    """Classify ticket identifiers once for log correlation and source handoff."""
     text = "\n".join(str(value) for value in snapshot.values() if isinstance(value, (str, int)))
     patterns = (
         r"(?i)(?:设备\s*sn|device\s*(?:sn|serial)|serial\s*(?:number|no)?|\bsn\b)[^A-Za-z0-9]{0,12}([A-Za-z0-9][A-Za-z0-9-]{5,39})",
@@ -846,7 +842,16 @@ def _ticket_runtime_signals(snapshot: Mapping[str, Any]) -> list[str]:
         r"(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9]*(?:Request|Response|Error|Exception|Callback|Handler)(?![A-Za-z0-9_])",
     )
     signals: list[str] = []
-    for pattern in patterns:
+    device_identities: list[str] = []
+
+    def add(target: list[str], value: Any) -> None:
+        if isinstance(value, tuple):
+            value = next((part for part in value if part), "")
+        normalized = str(value).strip()
+        if normalized and normalized not in target:
+            target.append(normalized)
+
+    for pattern_index, pattern in enumerate(patterns):
         for value in re.findall(pattern, text):
             if isinstance(value, tuple):
                 value = next((part for part in value if part), "")
@@ -857,45 +862,28 @@ def _ticket_runtime_signals(snapshot: Mapping[str, Any]) -> list[str]:
                 continue
             if value not in signals:
                 signals.append(value)
+            if pattern_index < 3:
+                add(device_identities, value)
             if len(signals) >= 16:
-                return signals
-    return signals
-
-
-def _balanced_runtime_signals(
-    *,
-    observed: Sequence[str] = (),
-    ticket: Sequence[str] = (),
-    map_hints: Sequence[str] = (),
-    limit: int = 16,
-) -> list[str]:
-    """Keep causal source findings dominant without losing independent hints."""
-    generic_map_signal = re.compile(r"(?i)(?:^(?:this|that|super|state)\.|(?:^|\.)(?:setState|getInstance|addListener|removeListener|componentDidMount|componentWillUnmount|render|configNav)$)")
-    map_hints = [value for value in map_hints if not generic_map_signal.search(str(value).strip())]
-    pools = ((observed, 8), (ticket, 4), (map_hints, 4))
-    selected: list[str] = []
-
-    def add(values: Sequence[str], quota: int | None = None) -> None:
-        added = 0
-        for raw_value in values:
-            value = str(raw_value).strip()
-            if not value or value in selected:
-                continue
-            selected.append(value)
-            added += 1
-            if len(selected) >= limit or (quota is not None and added >= quota):
-                return
-
-    for values, quota in pools:
-        add(values, quota)
-        if len(selected) >= limit:
-            return selected
-    # Backfill unused quota in evidence priority order.
-    for values, _quota in pools:
-        add(values)
-        if len(selected) >= limit:
+                break
+        if len(signals) >= 16:
             break
-    return selected
+
+    # Some tickets list bare device serials after a product label inside the
+    # precondition block. They are valid log identities, but not source names.
+    # Absolute links are removed first so document tokens cannot become device
+    # identities merely because they are long mixed strings.
+    without_urls = re.sub(r"https?://[^\s<>()\[\]{}]+", " ", text, flags=re.IGNORECASE)
+    preconditions = re.findall(
+        r"(?:预置条件)\s*[:：\]】]?\s*(.*?)(?=(?:测试步骤|操作步骤|复现概率|重现概率|实测结果|实际结果|预期结果|恢复方法|问题恢复方法)|$)",
+        without_urls,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    for block in preconditions:
+        for value in re.findall(r"(?<![A-Za-z0-9-])[A-Za-z0-9][A-Za-z0-9-]{12,39}(?![A-Za-z0-9-])", block):
+            if any(char.isalpha() for char in value) and sum(char.isdigit() for char in value) >= 4:
+                add(device_identities, value)
+    return TicketRuntimeSignals(values=tuple(signals), device_identities=tuple(device_identities))
 
 
 def _codex_preparation_context(
@@ -906,10 +894,7 @@ def _codex_preparation_context(
     reported_clients: Sequence[str],
     repository: str,
     log_evidence: Mapping[str, Any],
-    runtime_pre_scan: Mapping[str, Any],
     source_evidence: Mapping[str, Any],
-    runtime_log_run: str,
-    log_index_ready: bool,
 ) -> dict[str, Any]:
     """Project useful preparation into the first Codex turn; full data stays in audit."""
     visual = compact_visual_evidence(attachment_evidence)
@@ -991,28 +976,6 @@ def _codex_preparation_context(
             if architecture.get(key) not in (None, "", [], {})
         }
 
-    def runtime_excerpt(item: Mapping[str, Any]) -> dict[str, Any]:
-        projected = {key: str(item[key])[:420] for key in ("summary", "unproven", "status", "relevance", "identity_association") if item.get(key)}
-        sources = []
-        for source in item.get("sources", []) if isinstance(item.get("sources"), list) else []:
-            if not isinstance(source, Mapping):
-                continue
-            excerpt = {key: source[key] for key in ("candidate_id", "source", "line_start", "line_end") if source.get(key) not in (None, "")}
-            quote = str(source.get("quote") or "")
-            if quote:
-                excerpt["quote_excerpt"] = quote[:700]
-                if len(quote) > 700:
-                    excerpt["excerpt_only"] = True
-            if excerpt:
-                sources.append(excerpt)
-            if len(sources) >= 1:
-                break
-        if sources:
-            projected["sources"] = sources
-        return projected
-
-    direct = [runtime_excerpt(item) for item in runtime_pre_scan.get("transmitted_runtime_evidence", []) if isinstance(item, Mapping)]
-    candidates = [runtime_excerpt(item) for item in runtime_pre_scan.get("candidate_runtime_context", []) if isinstance(item, Mapping)]
     business = knowledge_context.business_knowledge
     rules = [dict(item) for item in business.get("rules", []) if isinstance(item, Mapping) and item.get("applicability") in {"matched", "conditional_reference"}]
     selected_rules = []
@@ -1037,132 +1000,13 @@ def _codex_preparation_context(
         packet["visual_facts"] = visual_packet
     if selected_rules:
         packet["business_reference_only"] = {"semantics": "reference_only", "rules": selected_rules}
-    if direct or candidates:
-        log_expert = runtime_pre_scan.get("log_expert")
-        packet["runtime_observations"] = {
-            "curation_status": log_expert.get("status") if isinstance(log_expert, Mapping) else None,
-            "accepted_evidence": direct,
-            "candidate_context_unverified": candidates,
-        }
-    if log_index_ready:
-        packet["log_query"] = {
-            "command": f"python .deerflow-log-query.py --run {runtime_log_run} --signal '<actual-source-field>' [--at HH:MM:SS]",
-            "scope": "按实际字段检索；已知失败时刻可用 --at 精确定位同一时段，不能把工单时间当作唯一过滤条件。结果仅为运行观察。",
-        }
+    if log_evidence.get("records"):
+        packet["runtime_observations"] = {"status": log_evidence.get("status"), "records": list(log_evidence.get("records") or [])}
     return packet
 
 
-def _build_runtime_pre_scan_audit(
-    *,
-    ticket_signals: Sequence[str],
-    map_signals: Sequence[str],
-    selected_signals: Sequence[str],
-    material: Mapping[str, Any] | None,
-    log_evidence: Mapping[str, Any] | None,
-    not_run_reason: str,
-) -> dict[str, Any]:
-    """Persist log curation while keeping speculative matches out of navigation.
-
-    Initial investigation may receive a curated log item only when one of its
-    backend-restored quotes contains an identifier explicitly present in the
-    ticket, or a same-parsed-device mapping binds that identifier to its alias.
-    Both remain observation context and never steer first-source navigation.
-    """
-    material_payload = (
-        dict(material)
-        if isinstance(material, Mapping)
-        else {
-            "status": "not_run",
-            "signals": [],
-            "files_searched": 0,
-            "reason": not_run_reason,
-        }
-    )
-    expert_payload = dict(log_evidence) if isinstance(log_evidence, Mapping) else {}
-    explicit_ticket_signals = tuple(str(item).strip() for item in ticket_signals if str(item).strip())
-    accepted = expert_payload.get("accepted_evidence")
-    transmitted: list[dict[str, Any]] = []
-    for raw in accepted if isinstance(accepted, list) else ():
-        if not isinstance(raw, Mapping) or str(raw.get("relevance") or "").lower() != "direct":
-            continue
-        restored_text = "\n".join(str(source.get("quote") or "") for source in raw.get("sources", []) if isinstance(source, Mapping)).casefold()
-        if any(signal.casefold() in restored_text for signal in explicit_ticket_signals):
-            transmitted.append(dict(raw))
-        else:
-            links = [
-                link
-                for link in material_payload.get("identity_links", [])
-                if isinstance(link, Mapping) and str(link.get("identifier") or "").casefold() in {signal.casefold() for signal in explicit_ticket_signals} and any(str(alias).casefold() in restored_text for alias in link.get("aliases", []))
-            ]
-            if links:
-                item = dict(raw)
-                item["sources"] = [*raw.get("sources", []), *[{key: link[key] for key in ("source", "line_start", "line_end", "quote")} for link in links[:2]]]
-                item["identity_association"] = "same_parsed_device_record; observation only, not causal proof"
-                transmitted.append(item)
-    candidate_context: list[dict[str, Any]] = []
-    candidate_context_chars = 0
-    selected_ids = {tuple(item.get("candidate_ids", [])) for item in transmitted}
-    selections = expert_payload.get("selections", [])
-    selections = list(selections) if isinstance(selections, list) else []
-    # A curator may select one side of a collection discrepancy and omit the
-    # other. Keep the highest-ranked complete raw snapshots as unverified
-    # context, without treating their cross-source identity as established.
-    raw_snapshot_limit = 4 if expert_payload.get("status") == "model_failed" else 2
-    selected_candidate_ids = {str(value) for item in [*transmitted, *selections] if isinstance(item, Mapping) for value in item.get("candidate_ids", [])}
-    raw_snapshots = [
-        {
-            "candidate_ids": [item["id"]],
-            "relevance": "supporting",
-            "summary": f"原始完整集合快照：{item.get('field') or '字段未命名'}，{len(item['ids'])} 项",
-            "proven": "原始日志含完整成员列表",
-            "unproven": "尚未核对是否为本次设备、同一事务及跨端同义字段",
-            "sources": [{"candidate_id": item["id"], **{key: item[key] for key in ("source", "line_start", "line_end", "quote") if key in item}}],
-        }
-        for item in (material_payload.get("candidates") if isinstance(material_payload.get("candidates"), list) else [])
-        if isinstance(item, Mapping)
-        and item.get("id")
-        and str(item["id"]) not in selected_candidate_ids
-        and item.get("kind") == "collection_snapshot"
-        and item.get("complete") is True
-        and isinstance(item.get("ids"), list)
-        and item.get("quote")
-    ][:raw_snapshot_limit]
-    selections = [*raw_snapshots, *selections]
-    for item in selections:
-        if not isinstance(item, Mapping) or item.get("relevance") not in {"direct", "supporting"}:
-            continue
-        if tuple(item.get("candidate_ids", [])) in selected_ids or not item.get("summary") or not item.get("proven"):
-            continue
-        sources = [{key: source.get(key) for key in ("candidate_id", "source", "line_start", "line_end", "quote")} for source in item.get("sources", [])[:2] if isinstance(source, Mapping) and source.get("quote")]
-        if not sources:
-            continue
-        projected = {"status": "unverified_ticket_association", "summary": item["summary"], "unproven": item.get("unproven") or "设备/事务与本工单关联尚未证明", "sources": sources}
-        cost = len(json.dumps(projected, ensure_ascii=False))
-        if candidate_context_chars + cost > 6_000:
-            continue
-        candidate_context.append(projected)
-        candidate_context_chars += cost
-        selected_ids.add(tuple(item.get("candidate_ids", [])))
-    return {
-        "rule_version": _RUNTIME_PRE_SCAN_RULE_VERSION,
-        "collection_policy": "broad_provenance_preserving_material_then_model_curation",
-        "transmission_policy": "explicit_ticket_identifier_or_same_parsed_device_identity_link; never navigation",
-        "ticket_signals": [str(item) for item in ticket_signals],
-        "map_signals": [str(item) for item in map_signals],
-        "selected_signals": [str(item) for item in selected_signals],
-        "material": material_payload,
-        "log_expert": expert_payload,
-        "transmitted_runtime_evidence": transmitted,
-        "candidate_runtime_context": candidate_context,
-        "runtime_navigation": {
-            "status": "disabled",
-            "reason": "runtime logs are evidence context, never first-source navigation",
-        },
-    }
-
-
 def build_bug_workflow(*, analyze: WorkflowNode, note: WorkflowNode):
-    """Build controller routing -> specialist analysis -> one ZenTao note."""
+    """Investigate, verify one note, and optionally execute its local changes."""
     graph = StateGraph(BugWorkflowState)
     graph.add_node("analyze", analyze)
     graph.add_node("note", note)
@@ -1170,6 +1014,25 @@ def build_bug_workflow(*, analyze: WorkflowNode, note: WorkflowNode):
     graph.add_edge("analyze", "note")
     graph.add_edge("note", END)
     return graph.compile()
+
+
+def _note_repair_paths(note: str, repository: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Use only repository-qualified references; the local section owns edits."""
+
+    def paths(text: str) -> tuple[str, ...]:
+        result = []
+        for match in _HANDOFF_SOURCE_REF_PATTERN.finditer(text):
+            path = match.group("path")
+            for prefix in (f"/mnt/repos/{repository}/", f"{repository}/"):
+                if path.startswith(prefix):
+                    relative = path[len(prefix) :]
+                    if ".." not in PurePosixPath(relative).parts and relative not in result:
+                        result.append(relative)
+                    break
+        return tuple(result)
+
+    local_section = re.search(r"本地代码修改\s*[：:]", note)
+    return paths(note), paths(note[local_section.end() :]) if local_section else ()
 
 
 class _WorkflowRequest(SimpleNamespace):
@@ -1232,6 +1095,7 @@ async def run_bug_workflow(
         workflow=initial_workflow,
     )
     current_workflow = runtime.workflow
+    runtime_log_indices: list[Path] = []
 
     async def is_cancelled() -> bool:
         return await runtime.is_cancelled()
@@ -1240,7 +1104,6 @@ async def run_bug_workflow(
         return await runtime.transition(status, **details)
 
     bug: dict[str, Any] | None = None
-    runtime_log_indices: list[Path] = []
     snapshot = compact_bug_snapshot(bug_snapshot or {})
     attachment_evidence = current_workflow.get("attachment_evidence")
     if not isinstance(attachment_evidence, dict):
@@ -1549,7 +1412,6 @@ async def run_bug_workflow(
         analysis_config = app_config.bug_analysis
         summary_config = analysis_config.summary
         summary_model_name = f"codex/{summary_config.codex_model_name}"
-        await require_codex_runtime(codex_bin=summary_config.codex_bin)
         investigation_attachment_evidence = attachment_evidence
         investigation_snapshot = _analysis_bug_snapshot(snapshot)
         investigation_snapshot["preliminary_triage"] = triage
@@ -1607,91 +1469,36 @@ async def run_bug_workflow(
                 investigation_snapshot,
             ),
         )
-        ticket_runtime_signals = _ticket_runtime_signals(investigation_snapshot)
-        seed_runtime_signals = _balanced_runtime_signals(
-            ticket=ticket_runtime_signals,
-            map_hints=(),
-        )
-        business_signals = [signal for rule in knowledge_context.business_knowledge.get("rules", []) if rule.get("applicability") == "matched" for signal in rule.get("runtime_signals", [])]
-        seed_runtime_signals = list(dict.fromkeys([*seed_runtime_signals, *business_signals]))[:24]
+        classified_ticket_signals = classify_ticket_runtime_signals(investigation_snapshot)
         log_expert_config = analysis_config.log_expert
-        log_expert_model_name = log_expert_config.model_name or "gpt-5.6-sol"
-        runtime_log_run = uuid.uuid4().hex
-        runtime_log_index = source_view_root / PurePosixPath(source_roots[0]).name / LOG_CACHE_DIRECTORY / runtime_log_run / "logs.sqlite"
-        runtime_log_indices.append(runtime_log_index)
-        runtime_log_material: dict[str, Any] = {
-            "status": "not_run",
-            "files_searched": 0,
-            "signals": seed_runtime_signals,
-            "time_hints": _runtime_log_time_hints(snapshot),
-            "candidates": [],
-            "material_chars": 0,
-        }
-        log_evidence: dict[str, Any] = {
-            "status": "not_run",
-            "model": log_expert_model_name,
-            "model_call_count": 0,
-            "token_usage": {},
-            "selections": [],
-            "accepted_evidence": [],
-            "text": "",
-        }
+        log_expert_model_name = log_expert_config.model_name
+        runtime_log_material: dict[str, Any] = {"status": "not_run", "files_searched": 0}
         if triage.get("evidence_need") == "include_technical" and investigation_attachment_evidence:
+            runtime_log_index = source_view_root / PurePosixPath(source_roots[0]).name / LOG_CACHE_DIRECTORY / uuid.uuid4().hex / "logs.sqlite"
+            runtime_log_indices.append(runtime_log_index)
             runtime_log_material = await asyncio.to_thread(
                 collect_log_material,
                 ensure_uploads_dir(analysis_thread_id, user_id=owner_user_id),
                 investigation_attachment_evidence,
-                signals=seed_runtime_signals,
-                identity_signals=ticket_runtime_signals,
-                time_hints=_runtime_log_time_hints(snapshot),
-                max_chars=log_expert_config.max_material_chars,
                 index_path=runtime_log_index,
             )
-            if runtime_log_material.get("status") == "collected":
-                try:
-                    log_evidence = await run_log_expert(
-                        bug_id=bug_id,
-                        bug_snapshot=investigation_snapshot,
-                        code_signals=seed_runtime_signals,
-                        material=runtime_log_material,
-                        app_config=app_config,
-                        model_name=log_expert_model_name,
-                        max_output_tokens=log_expert_config.max_output_tokens,
-                        max_items=log_expert_config.max_evidence_items,
-                        thinking_enabled=log_expert_config.thinking_enabled,
-                        thread_id=workflow_id,
-                    )
-                except Exception as exc:
-                    logger.warning("Runtime log expert failed before Codex; continuing without log evidence", exc_info=True)
-                    log_evidence = {
-                        "status": "model_failed",
-                        "model": log_expert_model_name,
-                        "model_call_count": 1,
-                        "token_usage": {},
-                        "error": f"{type(exc).__name__}: {exc}",
-                        "files_searched": int(runtime_log_material.get("files_searched") or 0),
-                        "material_chars": int(runtime_log_material.get("material_chars") or 0),
-                        "selections": [],
-                        "accepted_evidence": [],
-                        "text": "",
-                    }
-        log_evidence = {
-            **log_evidence,
-            "scan_diagnostics": runtime_log_material.get("scan_diagnostics", []),
-            "scan_partial": bool(runtime_log_material.get("scan_partial")),
-            "files_searched": int(runtime_log_material.get("files_searched") or 0),
+        log_evidence: dict[str, Any] = {"status": "no_material", "model": log_expert_model_name, "model_call_count": 0, "token_usage": {}, "records": []}
+        if runtime_log_material.get("status") == "collected":
+            log_evidence = await run_log_expert(
+                bug_id=bug_id,
+                ticket=codex_ticket_snapshot,
+                index_path=runtime_log_index,
+                model_name=log_expert_model_name,
+                reasoning_effort=log_expert_config.reasoning_effort,
+                codex_bin=summary_config.codex_bin,
+            )
+        runtime_pre_scan = {
+            "collection_policy": "indexed_logs_luna_source_line_selection",
+            "ticket_device_identities": list(classified_ticket_signals.device_identities),
+            "material": runtime_log_material,
+            "log_expert": {key: value for key, value in log_evidence.items() if key != "records"},
+            "runtime_navigation": {"status": "disabled", "reason": "runtime logs are observation context"},
         }
-        if runtime_log_material.get("status") == "read_failed":
-            log_evidence["status"] = "read_failed"
-        runtime_pre_scan = _build_runtime_pre_scan_audit(
-            ticket_signals=ticket_runtime_signals,
-            map_signals=(),
-            selected_signals=seed_runtime_signals,
-            material=runtime_log_material,
-            log_evidence=log_evidence,
-            not_run_reason=("log_material_not_collected" if runtime_log_material.get("status") != "collected" else ""),
-        )
-        log_evidence["candidate_runtime_context"] = runtime_pre_scan["candidate_runtime_context"]
         source_evidence = await asyncio.to_thread(
             build_source_retrieval,
             repository_root=repository_root,
@@ -1723,7 +1530,7 @@ async def run_bug_workflow(
             analysis_thread_id=analysis_thread_id,
             note_thread_id=note_thread_id,
             route="investigation",
-            route_reason=("工单、附件与日志事实已通过 Tabby 仓库上下文检索，并按当前检出源码重新校验。" if source_evidence.get("status") == "ready" else "前置检索没有形成当前源码候选；Codex 将直接从规范事实包调查。"),
+            route_reason=("工单与附件事实已通过 Tabby 仓库上下文检索，并按当前检出源码重新校验。" if source_evidence.get("status") == "ready" else "前置检索没有形成当前源码候选；Codex 将直接从规范事实包调查。"),
             specialist_agent=analysis_engine,
             analysis_engine=analysis_engine,
             reported_clients=list(reported_clients),
@@ -1744,10 +1551,7 @@ async def run_bug_workflow(
             reported_clients=reported_clients,
             repository=primary_repository,
             log_evidence=log_evidence,
-            runtime_pre_scan=runtime_pre_scan,
             source_evidence=source_evidence,
-            runtime_log_run=runtime_log_run,
-            log_index_ready=runtime_log_material.get("index_status") == "ready",
         )
         navigation_section = prepared_context.get("verified_source_navigation") if isinstance(prepared_context.get("verified_source_navigation"), Mapping) else {}
         transmitted_navigation = [dict(item) for item in navigation_section.get("entries", []) if isinstance(item, Mapping)]
@@ -1872,7 +1676,7 @@ async def run_bug_workflow(
                         (
                             current_workflow.get("triage_model"),
                             platform_model_name,
-                            log_expert_model_name,
+                            log_expert_model_name if log_evidence.get("model_call_count") else None,
                             summary_model_name,
                         ),
                     )
@@ -1902,9 +1706,8 @@ async def run_bug_workflow(
         pending_note = current_workflow.get("note_content")
         reuse_pending_note = not reuse_verified_note and isinstance(pending_note, str) and bool(pending_note.strip()) and _zentao_note_quality_error(pending_note, source_evidence) is None
         if reuse_verified_note:
-            # Summary recovery must never duplicate an already verified
-            # ZenTao note. Keep the exact persisted payload and continue with
-            # analysis/advice completion path; never start a repair.
+            # Keep the exact verified note during recovery; execution is
+            # independently guarded by its persisted repair_attempted marker.
             note_run_id = current_workflow.get("note_run_id")
             note_content = str(current_workflow["note_content"])
         elif reuse_pending_note:
@@ -2006,8 +1809,9 @@ async def run_bug_workflow(
             )
             return {"note_run_id": note_run_id, "note_content": note_content}
         handoff = state.get("handoff", "")
+        execute_repair = current_workflow.get("result_contract_version") == 3 and current_workflow.get("auto_repair_enabled") is True and current_workflow.get("repair_attempted") is not True
         await update(
-            "note_written",
+            "repairing" if execute_repair else "note_written",
             router_thread_id=router_thread_id,
             router_run_id=state.get("router_run_id"),
             analysis_thread_id=analysis_thread_id,
@@ -2029,12 +1833,75 @@ async def run_bug_workflow(
                 if result.get("mode") == "rewritten"
                 else "分析及修改/处理意见已新建于禅道并回读确认。"
             ),
-            completion_report="分析与建议交付已完成；未执行代码修改。" + ("已有分析备份，本次沿用旧备注。" if duplicate_note is not None else ""),
+            completion_report="备注已确认，正在按本次分析第四部分处理本地修改。" if execute_repair else "分析与建议交付已完成；未执行代码修改。" + ("已有分析备份，本次沿用旧备注。" if duplicate_note is not None else ""),
             route=state.get("route"),
             route_reason=state.get("route_reason"),
             specialist_agent=state.get("specialist_agent"),
         )
+        if execute_repair and not await is_cancelled():
+            await repair_from_analysis(str(state.get("analysis_report") or ""))
         return {"note_run_id": note_run_id, "note_content": note_content}
+
+    async def repair_from_analysis(analysis_report: str) -> None:
+        instructions = _heading_body(analysis_report, ("修改范围与其他端风险",), numbers=("四", "4"))
+        repository = str((current_workflow.get("platform_resolution") or {}).get("primary_repository") or "")
+        if repository not in {"sample_mobile_repo", "sample_platform_repo"}:
+            raise RuntimeError("repair_execution_failed: 本次分析缺少已确认仓库，未执行修改")
+        readable, editable = _note_repair_paths(instructions, repository)
+        if not editable:
+            await update("note_written", repair_outcome="not_required", repair_items=[], repair_report="本次分析第四部分没有引用可修改的本地文件，修改 0 个文件。", completion_report="分析及备注已交付；本次修改 0 个文件。", changed_files=[])
+            return
+        model_name = get_app_config().bug_analysis.repair.model_name
+        await update("repairing", repair_attempted=True, repair_engine="patch_executor", patch_executor_model=model_name, event_type="repair_started", summary=f"{model_name} 正在执行本次分析第四部分中的本地修改")
+        prepared = None
+        try:
+            prepared = await prepare_note_repair(bug_id=bug_id, workflow_id=workflow_id, repository=repository, note=instructions, readable_paths=readable, editable_paths=editable)
+            if await is_cancelled():
+                return
+            snapshot = prepared["snapshot"]
+            await update("repairing", rollback=snapshot, patch_executor_model_call_count=prepared["model_call_count"], patch_executor_token_usage=prepared["token_usage"])
+            if await is_cancelled():
+                return
+            # Source changes run as one shielded transaction. Cancellation waits
+            # for its commit/restore, then records the real files on cancelled.
+            commit = asyncio.create_task(asyncio.to_thread(prepared["workspace"].apply, snapshot))
+            cancelled = False
+            try:
+                changed_files = await asyncio.shield(commit)
+            except asyncio.CancelledError:
+                changed_files = await commit
+                cancelled = True
+            result = note_repair_result(repository, prepared["items"], changed_files)
+            details = dict(
+                **result,
+                changed_files=changed_files,
+                event_type="repair_completed",
+                summary=result["completion_report"],
+            )
+            if cancelled or await is_cancelled():
+                await runtime.transition("cancelled", guard_cancelled=False, **details)
+                raise asyncio.CancelledError
+            await update("note_written", **details)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.exception("Bug #%s note repair failed", bug_id)
+            actual_snapshot = await asyncio.to_thread(prepared["workspace"].applied_snapshot, prepared["snapshot"]) if prepared else {"available": False, "files": []}
+            changed_files = [f"{repository}/{item['path']}" for item in actual_snapshot["files"]]
+            failed_items = [
+                {**item, "outcome": "blocked", "reason": f"{item['reason']}；文件落盘未完成：{type(exc).__name__}"} if item["outcome"] == "applied" else item
+                for item in (prepared["items"] if prepared else [{"instruction": "执行本次分析第四部分的明确修改", "files": list(editable), "outcome": "blocked", "reason": f"执行失败：{type(exc).__name__}"}])
+            ]
+            result = note_repair_result(repository, failed_items, changed_files)
+            await update(
+                "failed",
+                failure_kind="repair_execution_failed",
+                event_type="repair_failed",
+                error=f"按备注修改失败：{type(exc).__name__}。分析和已确认备注仍保留。",
+                changed_files=changed_files,
+                rollback=actual_snapshot,
+                **result,
+            )
 
     try:
         await build_bug_workflow(analyze=analyze, note=note).ainvoke(
@@ -2052,6 +1919,8 @@ async def run_bug_workflow(
         error_text = str(exc)
         if error_text.startswith("analysis_execution_failed:"):
             failure_kind = "analysis_execution_failed"
+        elif error_text.startswith("repair_execution_failed:"):
+            failure_kind = "repair_execution_failed"
         elif error_text.startswith("summary_execution_failed:"):
             failure_kind = "summary_execution_failed"
         elif error_text.startswith("analysis_protocol_error:") or "specialist handoff length" in error_text or "bug evidence contract" in error_text.lower() or "formal bug handoff" in error_text.lower():
@@ -2087,10 +1956,9 @@ async def run_bug_workflow(
         )
         return dict(current_workflow)
     finally:
-        # Generated acceleration only; original attachments and persisted
-        # excerpts remain in the private audit. Exact run paths, never globbed.
         for index in runtime_log_indices:
             try:
+                index.with_name(LOG_QUERY_SCRIPT).unlink(missing_ok=True)
                 index.unlink(missing_ok=True)
                 index.parent.rmdir()
             except OSError:

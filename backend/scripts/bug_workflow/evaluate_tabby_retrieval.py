@@ -2,10 +2,10 @@
 """Read-only retrieval evaluation against durable historical Bug workflows.
 
 This script never contacts ZenTao, starts Codex, or mutates a workflow.  It
-builds a query from each persisted canonical fact packet, calls the configured
-Tabby search endpoint, and compares the returned current-checkout paths with
-source files cited by the historical final report.  The citations are a weak
-reference set, not ground-truth causality.
+rebuilds current canonical facts from each persisted ticket/attachment snapshot,
+calls the configured Tabby search endpoint, and compares the returned
+current-checkout paths with source files cited by the historical final report.
+The citations are a weak reference set, not ground-truth causality.
 """
 
 from __future__ import annotations
@@ -24,7 +24,9 @@ _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 if str(_BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(_BACKEND_ROOT))
 
+from app.gateway.bug_investigator import _knowledge_query_facts  # noqa: E402
 from app.gateway.bug_source_retrieval import build_source_retrieval  # noqa: E402
+from app.gateway.bug_workflow import classify_ticket_runtime_signals  # noqa: E402
 
 _SOURCE_REF = re.compile(r"(?P<repo>sample_mobile_repo|sample_platform_repo)/(?P<path>[A-Za-z0-9_.@+/-]+\.[A-Za-z0-9]+)(?::\d+)?")
 
@@ -63,6 +65,18 @@ def _historical_cases(database: Path, *, limit: int, bug_ids: set[int] | None = 
             if not repository or not reference_paths:
                 continue
             knowledge = workflow.get("investigation_knowledge_context") or {}
+            platform = workflow.get("platform_resolution") or {}
+            triage = workflow.get("triage") or {}
+            query_facts = _knowledge_query_facts(
+                workflow["bug_snapshot"],
+                workflow.get("attachment_evidence"),
+                tuple(triage.get("observed_clients") or ()),
+                tuple(platform.get("reported_clients") or workflow.get("reported_clients") or ()),
+                str(platform.get("investigation_mode") or ""),
+                str(platform.get("client_scope_status") or ""),
+                tuple(platform.get("candidate_implementation_layers") or ()),
+                None,
+            )
             business = knowledge.get("business_knowledge") or {}
             retrieval_aliases: list[str] = []
             for rule in business.get("rules", []) if isinstance(business.get("rules"), list) else []:
@@ -72,16 +86,19 @@ def _historical_cases(database: Path, *, limit: int, bug_ids: set[int] | None = 
                     text = str(alias).strip()
                     if text and text not in retrieval_aliases:
                         retrieval_aliases.append(text)
+            runtime_pre_scan = dict(workflow.get("runtime_pre_scan") or {})
+            if "ticket_device_identities" not in runtime_pre_scan:
+                runtime_pre_scan["ticket_device_identities"] = list(classify_ticket_runtime_signals(workflow["bug_snapshot"]).device_identities)
             runtime = {
                 "log_evidence": workflow.get("runtime_log_evidence") or {},
-                "runtime_pre_scan": workflow.get("runtime_pre_scan") or {},
+                "runtime_pre_scan": runtime_pre_scan,
             }
             cases.append(
                 {
                     "bug_id": bug_id,
                     "repository": repository,
                     "bug_snapshot": workflow["bug_snapshot"],
-                    "query_facts": knowledge.get("query_facts") or {},
+                    "query_facts": query_facts,
                     "runtime_evidence": runtime,
                     "retrieval_aliases": retrieval_aliases,
                     "reference_paths": reference_paths,

@@ -31,11 +31,13 @@ import {
   fetchBugWorkflow,
   retryBugWorkflowNote,
   rollbackBugWorkflow,
+  restoreBugWorkflow,
   submitBugWorkflowClarification,
   type BugWorkflow,
 } from "@/core/bugs/api";
 import {
   getBugEvidenceAssetStatusLabel,
+  getBugCodeChangeAction,
   getBugWorkflowStep,
   getBugWorkflowStatusLabel,
   getOpenHandsInvestigationStatusLabel,
@@ -89,6 +91,7 @@ export default function BugWorkbenchPage() {
     workflow?.status === "analyzing" ||
     workflow?.status === "writing_note" ||
     workflow?.status === "repairing";
+  const codeChangeAction = getBugCodeChangeAction(workflow);
   const shouldPoll =
     workflow !== null &&
     ![
@@ -213,7 +216,7 @@ export default function BugWorkbenchPage() {
     }
   }
 
-  async function finishRepair(action: "accept" | "rollback") {
+  async function finishRepair(action: "accept" | "rollback" | "restore") {
     if (!workflow) return;
     setSubmittingAcceptance(true);
     setError(null);
@@ -221,13 +224,15 @@ export default function BugWorkbenchPage() {
       const updatedWorkflow =
         action === "accept"
           ? await acceptBugWorkflow(workflow.id)
-          : await rollbackBugWorkflow(workflow.id);
+          : action === "restore"
+            ? await restoreBugWorkflow(workflow.id)
+            : await rollbackBugWorkflow(workflow.id);
       setWorkflow(updatedWorkflow);
     } catch (requestError) {
       setError(
         requestError instanceof Error
           ? requestError.message
-          : "无法完成本次修复验收。",
+          : "本次代码操作未完成。",
       );
     } finally {
       setSubmittingAcceptance(false);
@@ -257,21 +262,24 @@ export default function BugWorkbenchPage() {
       <WorkspaceBody className="overflow-y-auto">
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
           <section className="relative overflow-hidden rounded-2xl border bg-[linear-gradient(115deg,color-mix(in_oklab,var(--primary)_11%,transparent),transparent_48%)] p-6 sm:p-8">
-            <div className="bg-primary/10 absolute -top-16 -right-10 size-44 rounded-full blur-3xl" />
+            <div className="bg-primary/10 absolute -right-10 -top-16 size-44 rounded-full blur-3xl" />
             <div className="relative max-w-3xl">
               <Badge
                 variant="outline"
                 className="border-primary/30 bg-primary/5 text-primary"
               >
-                Codex 只读调查并保存备注
+                Codex 调查与按备注修改
               </Badge>
               <h1 className="mt-4 text-3xl font-semibold tracking-tight sm:text-4xl">
                 Bug 工作台
               </h1>
               <p className="text-muted-foreground mt-3">
-                DeerFlow 会读取工单与附件、确认复现端和仓库，并准备有界的日志与业务知识；Tabby
-                用精确锚点检索源码，再通过公司 embedding 对有界候选重排；只有在当前 checkout 中逐字核对通过的片段才会交给 Codex。随后一个只读 Codex
-                会话在选定仓库中调查源码并直接生成完整四段中文报告。系统只把第三、第四部分写入禅道并回读确认；不会自动修改代码。
+                DeerFlow
+                会读取工单与附件、确认复现端和仓库，并准备有界的日志与业务知识；Tabby
+                用精确锚点检索源码，再通过公司 embedding
+                对有界候选重排；只有在当前 checkout 中逐字核对通过的片段才会交给
+                Codex。随后一个只读 Codex
+                会话在选定仓库中调查源码并直接生成完整四段中文报告。系统把第三、第四部分写入禅道并回读确认，再按配置由修改模型执行本次明确的本地修改。
               </p>
             </div>
           </section>
@@ -309,7 +317,7 @@ export default function BugWorkbenchPage() {
 
           <section
             className="grid gap-3 md:grid-cols-3 xl:grid-cols-6"
-            aria-label="Bug 只读调查、四段报告与备注工作流"
+            aria-label="Bug 调查、四段报告、备注与代码修改工作流"
           >
             {workflowSteps.map((item, index) => {
               const Icon = item.icon;
@@ -352,12 +360,13 @@ export default function BugWorkbenchPage() {
                         : workflow?.status === "analyzing" &&
                             workflow.analysis_engine === "openhands"
                           ? "Bug Workbench 调查中"
-                        : getBugWorkflowStatusLabel(
-                            workflow?.status,
-                            workflow?.clarification_type,
-                            workflow?.repair_attempted === true,
-                            workflow?.failure_kind,
-                          )}
+                          : getBugWorkflowStatusLabel(
+                              workflow?.status,
+                              workflow?.clarification_type,
+                              workflow?.repair_attempted === true,
+                              workflow?.failure_kind,
+                              workflow?.repair_outcome,
+                            )}
                     </Badge>
                   </div>
                   {workflow?.revision ? (
@@ -385,10 +394,10 @@ export default function BugWorkbenchPage() {
                     <p className="text-sm font-medium">真实自动执行链路</p>
                     <p className="text-muted-foreground mt-2 text-sm leading-6">
                       {workflow?.analysis_engine === "codex"
-                        ? "DeerFlow 整理完整工单、附件事实、复现端、关联日志及少量可忽略源码入口，选定只读仓库视图。一个 Codex 会话自行核实或推翻线索、调查源码与运行边界，并在同一轮的最终回复中提交四段中文报告。DeerFlow 只负责保存、禅道备注写入与回读；不自动改代码。"
+                        ? "DeerFlow 整理工单和附件事实，Codex 在选定仓库视图中调查并提交四段报告；备注写入并回读确认后，按配置执行本次备注中的明确本地修改。"
                         : workflow?.analysis_engine === "openhands"
-                        ? "禅道 module 先确定仓库家族，设备/系统事实再确认具体复现端；缺少客户端事实时会显式降级为 module 范围并继续调查，不会伪造 Android/iOS 复现。DeerFlow 随后准备工单、附件、日志、业务别名和经过当前源码校验的 Tabby 候选；一个新的只读 Codex 会话在选定仓库中完成源码调查并生成四段报告。候选仅用于导航，不作为根因证据；Codex 可在已读到精确符号后使用一次有界 Tree-sitter 查询。"
-                        : "这是旧版本保存的工作流记录；页面只展示其已持久化结论，不再启动旧专家。"}
+                          ? "禅道 module 先确定仓库家族，设备/系统事实再确认具体复现端；缺少客户端事实时会显式降级为 module 范围并继续调查，不会伪造 Android/iOS 复现。DeerFlow 随后准备工单、附件、日志、业务别名和经过当前源码校验的 Tabby 候选；一个新的只读 Codex 会话在选定仓库中完成源码调查并生成四段报告。候选仅用于导航，不作为根因证据；Codex 可在已读到精确符号后使用一次有界 Tree-sitter 查询。"
+                          : "这是旧版本保存的工作流记录；页面只展示其已持久化结论，不再启动旧专家。"}
                       {workflow?.analysis_engine === "openhands"
                         ? " 调查后由独立 Codex 会话总结；建议未实施、未验证，不启动修复专家。"
                         : ""}
@@ -408,7 +417,8 @@ export default function BugWorkbenchPage() {
                       </div>
                       <p className="text-muted-foreground mt-1 text-xs leading-5">
                         module
-                        只确定仓库家族；设备、系统与正文确定复现端。缺失时保留“客户端未知”并从 module 对应仓库继续，RN/原生归属仍由主调查读取源码判断。
+                        只确定仓库家族；设备、系统与正文确定复现端。缺失时保留“客户端未知”并从
+                        module 对应仓库继续，RN/原生归属仍由主调查读取源码判断。
                       </p>
                       <dl className="mt-3 grid gap-2 sm:grid-cols-2">
                         <div>
@@ -475,7 +485,9 @@ export default function BugWorkbenchPage() {
                   ) : null}
 
                   {workflow?.source_retrieval ? (
-                    <SourceEvidencePanel retrieval={workflow.source_retrieval} />
+                    <SourceEvidencePanel
+                      retrieval={workflow.source_retrieval}
+                    />
                   ) : null}
 
                   {workflow?.analysis_engine === "codex" ? (
@@ -488,11 +500,13 @@ export default function BugWorkbenchPage() {
                             ? "源码调查失败"
                             : workflow.status === "failed"
                               ? "调查流程失败"
-                            : workflow.external_execution_status === "finished"
-                            ? "调查与报告已完成"
-                            : workflow.codex_progress?.phase === "report_completed"
-                              ? "报告已生成"
-                              : "源码调查中"}
+                              : workflow.external_execution_status ===
+                                  "finished"
+                                ? "调查与报告已完成"
+                                : workflow.codex_progress?.phase ===
+                                    "report_completed"
+                                  ? "报告已生成"
+                                  : "源码调查中"}
                         </Badge>
                       </div>
                       <p className="text-muted-foreground mt-1 text-xs leading-5">
@@ -513,7 +527,9 @@ export default function BugWorkbenchPage() {
                   ) : workflow?.analysis_engine === "openhands" ? (
                     <div className="mt-5 rounded-xl border p-4 text-sm">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="font-medium">Bug Workbench 主调查 Agent</p>
+                        <p className="font-medium">
+                          Bug Workbench 主调查 Agent
+                        </p>
                         <Badge variant="outline">
                           {getOpenHandsInvestigationStatusLabel(
                             workflow.external_execution_status,
@@ -532,17 +548,18 @@ export default function BugWorkbenchPage() {
                       {workflow.external_request_diagnostics ? (
                         <p className="text-muted-foreground mt-1 text-xs leading-5">
                           请求诊断：
-                          {workflow.external_request_diagnostics.route ?? "未知路由"}
-                          {typeof workflow.external_request_diagnostics.attempts ===
-                          "number"
+                          {workflow.external_request_diagnostics.route ??
+                            "未知路由"}
+                          {typeof workflow.external_request_diagnostics
+                            .attempts === "number"
                             ? ` · 尝试 ${workflow.external_request_diagnostics.attempts}`
                             : ""}
-                          {typeof workflow.external_request_diagnostics.timeouts ===
-                          "number"
+                          {typeof workflow.external_request_diagnostics
+                            .timeouts === "number"
                             ? ` · 超时 ${workflow.external_request_diagnostics.timeouts}`
                             : ""}
-                          {typeof workflow.external_request_diagnostics.last_elapsed_ms ===
-                          "number"
+                          {typeof workflow.external_request_diagnostics
+                            .last_elapsed_ms === "number"
                             ? ` · 最近耗时 ${Math.round(workflow.external_request_diagnostics.last_elapsed_ms / 100) / 10}s`
                             : ""}
                         </p>
@@ -709,7 +726,7 @@ export default function BugWorkbenchPage() {
                   {workflow?.repair_engine === "patch_executor" ? (
                     <div className="mt-5 rounded-xl border p-4 text-sm">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="font-medium">历史轻量修复记录</p>
+                        <p className="font-medium">按备注修改代码</p>
                         <Badge variant="outline">
                           {workflow.patch_executor_model_call_count ?? 0} 次调用
                         </Badge>
@@ -757,7 +774,9 @@ export default function BugWorkbenchPage() {
                   (workflow.external_repair_model_call_count ?? 0) > 0 ? (
                     <div className="mt-5 rounded-xl border p-4 text-sm">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="font-medium">Bug Workbench OpenHands 修复</p>
+                        <p className="font-medium">
+                          Bug Workbench OpenHands 修复
+                        </p>
                         <Badge variant="outline">
                           {workflow.external_repair_execution_status ??
                             "running"}
@@ -976,16 +995,6 @@ export default function BugWorkbenchPage() {
                         >
                           {submittingAcceptance ? "正在记录" : "验收通过"}
                         </Button>
-                        <Button
-                          variant="outline"
-                          onClick={() => void finishRepair("rollback")}
-                          disabled={
-                            submittingAcceptance ||
-                            !workflow.rollback?.available
-                          }
-                        >
-                          回退本次修改
-                        </Button>
                       </div>
                     </div>
                   ) : null}
@@ -995,7 +1004,9 @@ export default function BugWorkbenchPage() {
                     workflow.failure_kind === "note_write_failed") &&
                   workflow.analysis_report ? (
                     <div className="border-primary/30 bg-primary/5 mt-5 rounded-xl border p-4">
-                      <p className="text-sm font-medium">分析已完成，禅道备注待重试</p>
+                      <p className="text-sm font-medium">
+                        分析已完成，禅道备注待重试
+                      </p>
                       <p className="text-muted-foreground mt-2 text-sm leading-6">
                         已保存完整分析。重试只会重新生成备注，或复用已验证内容再次写入；不会重新运行源码调查。
                       </p>
@@ -1009,15 +1020,16 @@ export default function BugWorkbenchPage() {
                     </div>
                   ) : null}
 
-                  {workflow?.last_event?.event_type === "repair_failed" && workflow.note_verified ? (
+                  {workflow?.last_event?.event_type === "repair_failed" &&
+                  workflow.note_verified ? (
                     <p className="text-muted-foreground mt-5 rounded-xl border p-4 text-sm">
-                      历史自动修复失败；原分析和已确认备注仍可查看。自动修复入口已停用。
+                      代码修改未完成；原分析和已确认备注仍可查看。
                     </p>
                   ) : null}
 
                   <p className="text-muted-foreground mt-3 text-xs">
-                    分析及修改／处理意见写入禅道并回读确认后完成。系统不修改代码、不提交 Git、不关闭或解决
-                    Bug 或改动其他禅道字段。
+                    备注回读确认后，按配置自动执行本次明确的本地修改，并列出实际修改文件。待确认项保留；不提交
+                    Git、不改变 Bug 状态。
                   </p>
                 </div>
 
@@ -1037,7 +1049,7 @@ export default function BugWorkbenchPage() {
                     </li>
                     <li className="flex gap-2">
                       <span className="text-primary">03</span>{" "}
-                      备注同时包含必要证据和修改／处理意见，确认后完成；不会自动修复。
+                      备注确认后按配置执行明确的本地修改，反馈文件数量和完整文件名。
                     </li>
                   </ul>
                 </aside>
@@ -1051,18 +1063,18 @@ export default function BugWorkbenchPage() {
                       ? "目标确认前的分析结果"
                       : workflow?.analysis_engine === "codex"
                         ? "Codex 四段分析结论"
-                      : workflow?.analysis_engine === "openhands"
-                        ? "Bug Workbench 分析结论"
-                        : "完整专项分析报告"}
+                        : workflow?.analysis_engine === "openhands"
+                          ? "Bug Workbench 分析结论"
+                          : "完整专项分析报告"}
                   </div>
                   <Badge variant="outline">
                     {showingAnalysisDraft
                       ? "只读定位证据，不构成修改授权"
                       : workflow?.analysis_engine === "codex"
-                        ? "四段中文报告 · 未修改代码"
-                      : workflow?.analysis_engine === "openhands"
-                        ? "四项中文结论"
-                        : "八段完整报告，7000 字防失控上限"}
+                        ? "Codex 分析报告"
+                        : workflow?.analysis_engine === "openhands"
+                          ? "四项中文结论"
+                          : "八段完整报告，7000 字防失控上限"}
                   </Badge>
                 </div>
                 {workflow?.handoff_quality_warning ? (
@@ -1076,7 +1088,7 @@ export default function BugWorkbenchPage() {
                     。
                   </p>
                 ) : null}
-                <pre className="text-muted-foreground bg-muted/20 mt-4 min-h-24 rounded-xl border border-dashed p-4 font-sans text-sm leading-6 break-words whitespace-pre-wrap">
+                <pre className="text-muted-foreground bg-muted/20 mt-4 min-h-24 whitespace-pre-wrap break-words rounded-xl border border-dashed p-4 font-sans text-sm leading-6">
                   {displayedHandoff ??
                     "分析专家完成后，交接摘要会自动显示在这里。"}
                 </pre>
@@ -1087,7 +1099,7 @@ export default function BugWorkbenchPage() {
                       <GitPullRequest className="text-primary size-4" />{" "}
                       初步问题方向
                     </p>
-                    <pre className="text-muted-foreground bg-muted/20 mt-3 rounded-xl border border-dashed p-4 font-sans text-sm leading-6 break-words whitespace-pre-wrap">
+                    <pre className="text-muted-foreground bg-muted/20 mt-3 whitespace-pre-wrap break-words rounded-xl border border-dashed p-4 font-sans text-sm leading-6">
                       {workflow.triage.display_name ?? "问题方向待源码确认"}
                       {workflow.triage.observed_clients?.length
                         ? ` · 已观察端：${workflow.triage.observed_clients.join("/")}`
@@ -1108,7 +1120,7 @@ export default function BugWorkbenchPage() {
                       <GitPullRequest className="text-primary size-4" />{" "}
                       历史问题方向
                     </p>
-                    <pre className="text-muted-foreground bg-muted/20 mt-3 rounded-xl border border-dashed p-4 font-sans text-sm leading-6 break-words whitespace-pre-wrap">
+                    <pre className="text-muted-foreground bg-muted/20 mt-3 whitespace-pre-wrap break-words rounded-xl border border-dashed p-4 font-sans text-sm leading-6">
                       {workflow.route_reason}
                     </pre>
                   </>
@@ -1121,7 +1133,7 @@ export default function BugWorkbenchPage() {
                         ? "已确认写入的禅道备注"
                         : "尚未确认写入的禅道备注内容"}
                     </p>
-                    <pre className="text-muted-foreground bg-muted/20 mt-3 max-h-96 overflow-auto rounded-xl border border-dashed p-4 font-sans text-sm leading-6 break-words whitespace-pre-wrap">
+                    <pre className="text-muted-foreground bg-muted/20 mt-3 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-xl border border-dashed p-4 font-sans text-sm leading-6">
                       {workflow.note_content}
                     </pre>
                   </>
@@ -1135,21 +1147,50 @@ export default function BugWorkbenchPage() {
                   <>
                     <p className="mt-5 flex items-center gap-2 font-medium">
                       <GitPullRequest className="text-primary size-4" />{" "}
-                      历史修复结果
+                      按备注修改结果
                     </p>
-                    <pre className="text-muted-foreground bg-muted/20 mt-3 max-h-96 overflow-auto rounded-xl border border-dashed p-4 font-sans text-sm leading-6 break-words whitespace-pre-wrap">
+                    <pre className="text-muted-foreground bg-muted/20 mt-3 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-xl border border-dashed p-4 font-sans text-sm leading-6">
                       {workflow.repair_report}
                     </pre>
                     {workflow.changed_files?.length ? (
                       <p className="text-muted-foreground mt-3 text-sm">
-                        实际修改文件：{workflow.changed_files.join("、")}
+                        {workflow.rollback?.completed
+                          ? "已回退的原修改涉及"
+                          : "实际修改"}{" "}
+                        {workflow.changed_files.length} 个文件：
+                        {workflow.changed_files.join("、")}
                       </p>
                     ) : null}
                   </>
                 ) : null}
                 {workflow?.completion_report ? (
-                  <p className="text-muted-foreground mt-3 text-sm">
+                  <p className="text-muted-foreground mt-3 whitespace-pre-wrap break-words text-sm">
                     {workflow.completion_report}
+                  </p>
+                ) : null}
+                {codeChangeAction ? (
+                  <div className="mt-4 rounded-xl border p-4">
+                    <p className="text-muted-foreground mb-3 text-sm">
+                      {codeChangeAction === "restore"
+                        ? "本次修改已回退，可恢复同一份修改。"
+                        : "按当前任务的修改快照回退，之后可以再次恢复。"}
+                    </p>
+                    <Button
+                      variant="outline"
+                      disabled={submittingAcceptance}
+                      onClick={() => void finishRepair(codeChangeAction)}
+                    >
+                      {submittingAcceptance
+                        ? "正在处理"
+                        : codeChangeAction === "restore"
+                          ? "恢复本次修改"
+                          : "回退本次修改"}
+                    </Button>
+                  </div>
+                ) : workflow?.rollback?.completed &&
+                  !workflow.rollback.restorable ? (
+                  <p className="text-muted-foreground mt-3 text-sm">
+                    历史回退未保存修改后的内容，无法恢复。
                   </p>
                 ) : null}
                 {workflow?.error ? (
@@ -1165,7 +1206,7 @@ export default function BugWorkbenchPage() {
               <h2 className="mt-3 font-medium">从一个禅道 Bug 开始</h2>
               <p className="text-muted-foreground mt-1 text-sm">
                 输入 Bug ID 后，Bug Workbench
-                完成连续只读调查，生成四段结论和修改／处理意见，写入禅道并回读确认后结束。
+                完成源码调查，生成四段结论并确认禅道备注，再按配置执行明确的本地修改并反馈文件清单。
               </p>
             </section>
           )}

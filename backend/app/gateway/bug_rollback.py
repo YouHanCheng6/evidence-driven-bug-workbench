@@ -3,23 +3,21 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import os
 import stat
 import subprocess
 import tempfile
+import threading
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from deerflow.config import get_app_config
 
 _MAX_ROLLBACK_FILE_BYTES = 4 * 1024 * 1024
+REPAIR_FILE_LOCK = threading.RLock()
 _MAX_ROLLBACK_TOTAL_BYTES = 16 * 1024 * 1024
-_MAX_REPAIR_SNAPSHOT_FILE_BYTES = 4 * 1024 * 1024
-_MAX_REPAIR_SNAPSHOT_TOTAL_BYTES = 256 * 1024 * 1024
-_MAX_REPAIR_SNAPSHOT_FILES = 4_000
-_MAX_REPAIR_CHANGED_FILES = 96
-_MAX_REPAIR_IMPORT_TOTAL_BYTES = 32 * 1024 * 1024
 _REPAIR_EXCLUDED_DIRECTORIES = frozenset(
     {
         ".agents",
@@ -119,9 +117,7 @@ def _selected_mount_root(repository: str) -> Path:
     matches = {
         Path(mount.host_path).expanduser().resolve()
         for mount in get_app_config().sandbox.mounts
-        if not mount.read_only
-        and str(mount.container_path).rstrip("/") == selected_container_root
-        and Path(mount.host_path).expanduser().resolve().is_dir()
+        if not mount.read_only and str(mount.container_path).rstrip("/") == selected_container_root and Path(mount.host_path).expanduser().resolve().is_dir()
     }
     if len(matches) != 1:
         raise RuntimeError(f"Repair repository {repository} does not resolve uniquely to one writable mount")
@@ -292,63 +288,6 @@ def _nested_repo_for_authorized_files(
     return next(iter(shared_matches))
 
 
-def _discover_git_roots(mount_root: Path) -> list[tuple[Path, str]]:
-    """Find every real Git worktree inside one configured repository family."""
-    roots: set[tuple[Path, str]] = set()
-    for current, directories, _filenames in os.walk(mount_root, followlinks=False):
-        current_path = Path(current).resolve()
-        directories[:] = sorted(
-            name
-            for name in directories
-            if name != ".git"
-            and name.lower() not in _REPAIR_EXCLUDED_DIRECTORIES
-            and not (current_path / name).is_symlink()
-        )
-        if not (current_path / ".git").exists():
-            continue
-        resolved = _git_optional(current_path, "rev-parse", "--show-toplevel")
-        if not resolved or Path(resolved).resolve() != current_path:
-            continue
-        prefix = current_path.relative_to(mount_root).as_posix()
-        roots.add((current_path, "" if prefix == "." else prefix))
-    if not roots:
-        raise RuntimeError("Selected repair repository contains no Git worktree")
-    return sorted(roots, key=lambda item: (len(PurePosixPath(item[1]).parts), item[1]))
-
-
-def _select_navigation_git_roots(
-    discovered: list[tuple[Path, str]],
-    navigation_paths: tuple[str, ...],
-) -> list[tuple[Path, str]]:
-    """Select only Git roots reached by verified repair navigation.
-
-    A repository-family mount may contain many independent third-party worktrees.
-    Repair needs the deepest worktree owning each verified path, not every nested
-    worktree that happens to exist below the mount.  With no usable path, retain
-    only the shallow primary worktree rather than expanding speculatively.
-    """
-    selected: set[tuple[Path, str]] = set()
-    for value in navigation_paths:
-        try:
-            relative = PurePosixPath(_safe_relative_path(value).as_posix())
-        except ValueError:
-            continue
-        matches: list[tuple[int, Path, str]] = []
-        for repo_root, prefix in discovered:
-            if prefix:
-                try:
-                    relative.relative_to(PurePosixPath(prefix))
-                except ValueError:
-                    continue
-            matches.append((len(PurePosixPath(prefix).parts) if prefix else 0, repo_root, prefix))
-        if matches:
-            _depth, repo_root, prefix = max(matches, key=lambda item: item[0])
-            selected.add((repo_root, prefix))
-    if selected:
-        return sorted(selected, key=lambda item: (len(PurePosixPath(item[1]).parts), item[1]))
-    return [min(discovered, key=lambda item: (len(PurePosixPath(item[1]).parts), item[1]))]
-
-
 def _git_root_record(repo_root: Path, path_prefix: str) -> dict[str, Any]:
     branch = _git_optional(repo_root, "symbolic-ref", "--short", "HEAD") or "DETACHED"
     head = _git_optional(repo_root, "rev-parse", "HEAD") or "unknown"
@@ -448,10 +387,10 @@ def _nested_repo_is_configured(repo_root: Path) -> bool:
     return False
 
 
-def rollback_repair(snapshot: dict[str, Any]) -> dict[str, Any]:
-    """Restore only the exact clean files captured for this workflow."""
-    if not snapshot.get("available") or snapshot.get("completed"):
-        raise ValueError("This repair has no pending rollback")
+def _repair_snapshot_files(snapshot: dict[str, Any]) -> list[tuple[dict[str, Any], Path]]:
+    """Validate configured roots and resolve every snapshot path once."""
+    if not snapshot.get("available"):
+        raise ValueError("本次任务没有可回退的代码修改快照")
     repository = snapshot.get("repository")
     if repository:
         mount_root = _selected_mount_root(str(repository))
@@ -469,34 +408,120 @@ def rollback_repair(snapshot: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(files, list) or not files:
         raise ValueError("Rollback snapshot is invalid")
 
-    conflicts: list[str] = []
     resolved: list[tuple[dict[str, Any], Path]] = []
     for entry in files:
         if not isinstance(entry, dict):
             raise ValueError("Rollback snapshot is invalid")
         path = _safe_baseline_target(snapshot, str(entry.get("path", "")))
-        expected_hash = entry.get("after_sha256")
-        if _sha256(path) != expected_hash:
-            conflicts.append(str(entry.get("path", "")))
         resolved.append((entry, path))
-    if conflicts:
-        raise RuntimeError(f"文件已在修复后被改动，拒绝覆盖：{', '.join(conflicts)}")
+    if len({str(path) for _, path in resolved}) != len(resolved):
+        raise ValueError("修改快照包含重复文件")
+    return resolved
 
-    for entry, path in resolved:
-        if entry.get("before_exists"):
-            original = base64.b64decode(str(entry.get("before_content", "")), validate=True)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            file_descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.rollback-", dir=path.parent)
-            try:
-                with os.fdopen(file_descriptor, "wb") as temporary:
-                    temporary.write(original)
-                os.replace(temporary_name, path)
-                before_mode = entry.get("before_mode")
-                if isinstance(before_mode, int):
-                    os.chmod(path, before_mode)
-            finally:
-                Path(temporary_name).unlink(missing_ok=True)
-        else:
-            path.unlink(missing_ok=True)
 
-    return {**snapshot, "completed": True}
+def _matches_file(path: Path, expected_hash: str | None) -> bool:
+    if path.is_symlink():
+        return False
+    return not path.exists() if expected_hash is None else _sha256(path) == expected_hash
+
+
+def _snapshot_content(entry: dict[str, Any], side: str) -> bytes | None:
+    exists = entry.get(f"{side}_exists", True)
+    if not exists:
+        return None
+    encoded = entry.get(f"{side}_content")
+    if not isinstance(encoded, str):
+        raise ValueError("历史回退记录未保存修改后内容，无法恢复该次修改")
+    content = base64.b64decode(encoded, validate=True)
+    if len(content) > _MAX_ROLLBACK_FILE_BYTES:
+        raise ValueError("修改快照中的文件超出容量限制")
+    expected = entry.get(f"{side}_sha256")
+    if expected is not None and hashlib.sha256(content).hexdigest() != expected:
+        raise ValueError("修改快照内容与校验值不一致")
+    return content
+
+
+def prepare_repair_change(snapshot: dict[str, Any], *, restore: bool = False) -> dict[str, Any]:
+    """Capture forward data before rollback; the caller persists it before writes."""
+    with REPAIR_FILE_LOCK:
+        prepared = copy.deepcopy(snapshot)
+        action = "restore" if restore else "rollback"
+        pending = prepared.get("pending_action") == action
+        if not pending and bool(prepared.get("completed")) != restore:
+            raise ValueError("当前修改尚未回退，无需恢复" if restore else "本次修改已经回退")
+        conflicts = []
+        total_bytes = 0
+        for entry, path in _repair_snapshot_files(prepared):
+            before = _snapshot_content(entry, "before")
+            entry["before_sha256"] = hashlib.sha256(before).hexdigest() if before is not None else None
+            if not isinstance(entry.get("after_content"), str):
+                if restore or not _matches_file(path, entry.get("after_sha256")):
+                    raise ValueError("历史快照缺少修改后内容，且当前文件无法核对；不能恢复或覆盖后续修改")
+                entry["after_content"] = base64.b64encode(path.read_bytes()).decode("ascii")
+                entry["after_mode"] = stat.S_IMODE(path.stat().st_mode)
+            after = _snapshot_content(entry, "after")
+            entry["after_sha256"] = hashlib.sha256(after).hexdigest() if after is not None else None
+            source_side, target_side = ("before", "after") if restore else ("after", "before")
+            if not _matches_file(path, entry[f"{source_side}_sha256"]) and not (pending and _matches_file(path, entry[f"{target_side}_sha256"])):
+                conflicts.append(str(entry["path"]))
+            total_bytes += len(before or b"") + len(after or b"")
+        if conflicts:
+            raise RuntimeError(f"文件存在后续改动，未覆盖：{', '.join(conflicts)}")
+        if total_bytes > 2 * _MAX_ROLLBACK_TOTAL_BYTES:
+            raise ValueError("本次回退／恢复快照超出容量限制")
+        prepared["pending_action"] = action
+        return prepared
+
+
+def _write_repair_file(path: Path, content: bytes | None, mode: int | None) -> None:
+    """Apply a text snapshot atomically, preserving its recorded file mode."""
+    if content is None:
+        path.unlink(missing_ok=True)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, name = tempfile.mkstemp(prefix=f".{path.name}.bug-change-", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as temporary:
+            temporary.write(content)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.chmod(name, mode if isinstance(mode, int) else 0o644)
+        os.replace(name, path)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
+def _switch_repair(snapshot: dict[str, Any], *, restore: bool) -> dict[str, Any]:
+    with REPAIR_FILE_LOCK:
+        prepared = prepare_repair_change(snapshot, restore=restore)
+        target_side = "after" if restore else "before"
+        written = []
+        try:
+            for entry, path in _repair_snapshot_files(prepared):
+                if _matches_file(path, entry[f"{target_side}_sha256"]):
+                    continue  # Finish an interrupted operation without repeating writes.
+                old_content = path.read_bytes() if path.exists() else None
+                old_mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else None
+                source_side = "before" if restore else "after"
+                if not _matches_file(path, entry[f"{source_side}_sha256"]):
+                    raise RuntimeError(f"文件在操作期间发生变化，未覆盖：{entry['path']}")
+                _write_repair_file(path, _snapshot_content(entry, target_side), entry.get(f"{target_side}_mode"))
+                written.append((entry, path, old_content, old_mode))
+        except BaseException:
+            for entry, path, content, mode in reversed(written):
+                if not _matches_file(path, entry[f"{target_side}_sha256"]):
+                    raise RuntimeError(f"文件在操作期间被其他程序修改，保留现场：{entry['path']}")
+                _write_repair_file(path, content, mode)
+            raise
+        prepared.pop("pending_action", None)
+        return {**prepared, "completed": not restore}
+
+
+def rollback_repair(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Revert exactly this workflow's changes and retain their forward contents."""
+    return _switch_repair(snapshot, restore=False)
+
+
+def restore_repair(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Reapply this workflow's recorded changes without invoking a model."""
+    return _switch_repair(snapshot, restore=True)

@@ -244,7 +244,12 @@ export type BugWorkflow = {
       snippet?: string;
       score?: number;
       current_source_verified?: boolean;
-      retrieval_stage?: "exact_anchor" | "concept_fallback" | "concept_expansion" | "module_architecture" | string;
+      retrieval_stage?:
+        | "exact_anchor"
+        | "concept_fallback"
+        | "concept_expansion"
+        | "module_architecture"
+        | string;
       candidate_kind?: "implementation" | "resource" | "other" | string;
       product_scope?: string;
     }>;
@@ -263,7 +268,13 @@ export type BugWorkflow = {
       architecture_status?: string;
       architecture_model?: string;
       architecture_module_count?: number;
-      retrieval_mode?: "exact_anchor" | "concept_fallback" | "module_architecture" | "layered" | "none" | string;
+      retrieval_mode?:
+        | "exact_anchor"
+        | "concept_fallback"
+        | "module_architecture"
+        | "layered"
+        | "none"
+        | string;
       semantic_status?: string;
     };
     architecture_resolution?: {
@@ -271,7 +282,11 @@ export type BugWorkflow = {
       reason?: string;
       model?: string;
       config_path?: string;
-      modules?: Array<{ name?: string; nickname?: string; implementation_paths?: string[] }>;
+      modules?: Array<{
+        name?: string;
+        nickname?: string;
+        implementation_paths?: string[];
+      }>;
     };
   } | null;
   source_query_preflight?: Record<string, unknown> | null;
@@ -333,7 +348,25 @@ export type BugWorkflow = {
   review_target_status?: "proven" | "needs_confirmation" | null;
   review_target_reason?: string | null;
   repair_report?: string | null;
+  repair_outcome?:
+    | "completed"
+    | "partial"
+    | "incomplete"
+    | "not_required"
+    | null;
+  repair_items?: Array<{
+    instruction: string;
+    files: string[];
+    outcome:
+      | "pending"
+      | "applied"
+      | "already_satisfied"
+      | "blocked"
+      | "not_required";
+    reason: string;
+  }>;
   repair_attempted?: boolean;
+  auto_repair_enabled?: boolean;
   change_advice?: ChangeAdvice[];
   code_changes?: Array<{
     target_id?: string;
@@ -349,6 +382,8 @@ export type BugWorkflow = {
     completed?: boolean;
     files?: string[];
     reason?: string;
+    restorable?: boolean;
+    pending_action?: "rollback" | "restore" | null;
   } | null;
   note_thread_id?: string | null;
   note_run_id?: string | null;
@@ -360,7 +395,11 @@ export type BugWorkflow = {
   changed_files?: string[];
   completion_report?: string | null;
   analysis_summary?: string | null;
-  handoff_state?: "analysis_draft" | "repair_ready" | "analysis_complete" | null;
+  handoff_state?:
+    | "analysis_draft"
+    | "repair_ready"
+    | "analysis_complete"
+    | null;
   clarification?: {
     question?: string;
     response_mode?: "choice" | "exact_text" | "copy_scope";
@@ -397,6 +436,7 @@ export type BugWorkflow = {
     | "review_execution_failed"
     | "note_generation_failed"
     | "note_write_failed"
+    | "repair_execution_failed"
     | "workflow_failed"
     | null;
   error?: string | null;
@@ -433,7 +473,7 @@ export async function createBugWorkflow(bugId: string): Promise<BugWorkflow> {
     await fetch(`${getBackendBaseURL()}/api/bug-workflows`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ bug_id: Number(bugId), auto_repair: false }),
+      body: JSON.stringify({ bug_id: Number(bugId) }),
     }),
   );
 }
@@ -465,6 +505,17 @@ export async function rollbackBugWorkflow(
   return readWorkflow(
     await fetch(
       `${getBackendBaseURL()}/api/bug-workflows/${workflowId}/rollback`,
+      { method: "POST" },
+    ),
+  );
+}
+
+export async function restoreBugWorkflow(
+  workflowId: string,
+): Promise<BugWorkflow> {
+  return readWorkflow(
+    await fetch(
+      `${getBackendBaseURL()}/api/bug-workflows/${workflowId}/restore`,
       { method: "POST" },
     ),
   );

@@ -15,7 +15,7 @@
 # ============================================================================
 # Bump this number when the config schema changes.
 # Run `make config-upgrade` to merge new fields into your local config.yaml.
-config_version: 45
+config_version: 46
 
 # ============================================================================
 # Logging
@@ -87,6 +87,13 @@ token_budget:
 # investigates source and authors the report. DeerFlow owns note writeback.
 bug_analysis:
   engine: codex
+  # Optional execution of explicit local changes in THIS run's analysis report
+  # section four, only after verified note writeback. Historical notes are not inputs.
+  # Disabled in the public example: register your own model and credentials first.
+  repair:
+    enabled: false
+    model_name: example-repair-model
+    timeout_seconds: 600
   # Private operator-owned JSON, relative to DEER_FLOW_HOME. Never publish
   # company rules with source code. Missing/invalid knowledge fails open.
   business_knowledge_file: knowledge/bug-business-rules.json
@@ -128,13 +135,10 @@ bug_analysis:
     model_name: gpt-6-luna
     reasoning_effort: medium
   log_expert:
-    # One optional no-tools call curates bounded raw log excerpts before Codex.
-    # Prefer a fast structured-output model; failures leave the source path unchanged.
-    model_name: null
-    max_material_chars: 80000
-    max_output_tokens: 1500
-    max_evidence_items: 4
-    thinking_enabled: false
+    # A fresh read-only Codex turn searches a private index and selects source lines.
+    # The backend restores complete redacted original records, not model summaries.
+    model_name: gpt-6-luna
+    reasoning_effort: medium
   summary:
     # One local read-only Codex conversation investigates and writes the
     # complete four-part report in the selected repository's source-only view.
@@ -182,6 +186,15 @@ max_recursion_limit: 1000
 #                                      # (optional; omit → hits billed at miss price)
 
 models:
+  # Optional note executor. Replace the name/model/endpoint for your own provider.
+  # - name: example-repair-model
+  #   display_name: Example repair model
+  #   use: langchain_openai:ChatOpenAI
+  #   model: your-provider-model
+  #   api_key: $EXAMPLE_REPAIR_API_KEY
+  #   base_url: https://gateway.example.invalid/v1
+  #   timeout: 180
+  #   max_retries: 1
   # Example: Volcengine (Doubao) model
   # - name: doubao-seed-1.8
   #   display_name: Doubao-Seed-1.8

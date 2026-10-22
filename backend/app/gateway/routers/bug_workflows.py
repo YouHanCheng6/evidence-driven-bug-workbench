@@ -5,12 +5,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+import weakref
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy.exc import IntegrityError
 
-from app.gateway.bug_rollback import rollback_repair
+from app.gateway.bug_rollback import prepare_repair_change, restore_repair, rollback_repair
 from app.gateway.bug_workflow import (
     _public_bug_workflow_error,
     attach_workflow_task,
@@ -27,13 +28,13 @@ from app.gateway.bug_workflow_models import (
 )
 from app.gateway.bug_workflow_state import PERSISTED_RESUMABLE_STATUSES, BugWorkflowRuntime
 from app.gateway.deps import get_current_user, get_thread_store
+from deerflow.config.app_config import get_app_config
 from deerflow.persistence.bug_workbench import read_bug_workbench
 
 router = APIRouter(prefix="/api/bug-workflows", tags=["bug-workflows"])
 logger = logging.getLogger(__name__)
-_TERMINAL_WORKFLOW_STATUSES = frozenset(
-    {"note_written", "skipped", "cancelled", "analysis_incomplete", "failed", "accepted", "rolled_back"}
-)
+_TERMINAL_WORKFLOW_STATUSES = frozenset({"note_written", "skipped", "cancelled", "analysis_incomplete", "failed", "accepted", "rolled_back"})
+_REPAIR_ACTION_LOCKS: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
 
 
 def _summary_response(workflow: dict) -> BugWorkflowSummaryResponse:
@@ -109,6 +110,8 @@ def _public_rollback(rollback: dict[str, Any]) -> dict[str, Any]:
         "completed": bool(rollback.get("completed")),
         "files": [entry["path"] for entry in files if isinstance(entry, dict) and isinstance(entry.get("path"), str)] if isinstance(files, list) else [],
         "reason": rollback.get("reason") if isinstance(rollback.get("reason"), str) else None,
+        "restorable": bool(rollback.get("completed") and isinstance(files, list) and files and all(isinstance(entry, dict) and isinstance(entry.get("after_content"), str) for entry in files)),
+        "pending_action": rollback.get("pending_action"),
     }
 
 
@@ -219,17 +222,18 @@ def _resolve_video_clarification_submission(
 
 @router.post("", response_model=BugWorkflowResponse, status_code=202)
 async def create_bug_workflow(body: CreateBugWorkflowRequest, request: Request) -> BugWorkflowResponse:
-    """Start read-only investigation, advice delivery, and verified note writeback."""
+    """Investigate, verify this run's note, then execute configured local changes."""
     owner_user_id = await get_current_user(request)
     if not owner_user_id:
         raise HTTPException(status_code=401, detail="Authentication is required")
-    if body.auto_repair:
-        raise HTTPException(status_code=422, detail="当前流程仅调查并交付建议，不支持自动修复。")
+    repair_config = get_app_config().bug_analysis.repair
+    auto_repair = repair_config.enabled and body.auto_repair is not False
+    if body.auto_repair is True and not repair_config.enabled:
+        raise HTTPException(status_code=422, detail="请先启用 bug_analysis.repair 并配置修改模型。")
+    if auto_repair and get_app_config().get_model_config(repair_config.model_name) is None:
+        raise HTTPException(status_code=503, detail=f"修改模型尚未配置：{repair_config.model_name}")
 
-    workflow_id = (
-        f"bug-workflow-{uuid.uuid5(uuid.NAMESPACE_URL, f'{owner_user_id}:{body.idempotency_key}').hex}"
-        if body.idempotency_key else f"bug-workflow-{uuid.uuid4().hex}"
-    )
+    workflow_id = f"bug-workflow-{uuid.uuid5(uuid.NAMESPACE_URL, f'{owner_user_id}:{body.idempotency_key}').hex}" if body.idempotency_key else f"bug-workflow-{uuid.uuid4().hex}"
     store = get_thread_store(request)
     if body.idempotency_key:
         existing = await store.get(workflow_id, user_id=owner_user_id)
@@ -250,8 +254,8 @@ async def create_bug_workflow(body: CreateBugWorkflowRequest, request: Request) 
             "router_thread_id": router_thread_id,
             "analysis_thread_id": analysis_thread_id,
             "note_thread_id": note_thread_id,
-            "auto_repair_enabled": False,
-            "result_contract_version": 2,
+            "auto_repair_enabled": auto_repair,
+            "result_contract_version": 3,
             **({"channel_key": body.channel_key, "channel_owner_user_id": owner_user_id} if body.channel_key else {}),
         },
         status="routing",
@@ -322,8 +326,7 @@ async def get_active_bug_workflow(channel_key: str, request: Request) -> BugWork
     for row in rows:
         workflow = row.get("metadata", {}).get("bug_workflow")
         if isinstance(workflow, dict) and (
-            workflow.get("status") in PERSISTED_RESUMABLE_STATUSES
-            or (workflow.get("status") == "awaiting_clarification" and workflow.get("clarification_type") == "video" and workflow.get("clarification_stage") == "pre_analysis")
+            workflow.get("status") in PERSISTED_RESUMABLE_STATUSES or (workflow.get("status") == "awaiting_clarification" and workflow.get("clarification_type") == "video" and workflow.get("clarification_stage") == "pre_analysis")
         ):
             return _response(workflow)
     return None
@@ -387,7 +390,7 @@ async def get_bug_workflow(workflow_id: str, request: Request) -> BugWorkflowRes
 async def retry_failed_bug_repair(workflow_id: str, request: Request) -> BugWorkflowResponse:
     """Retired execution endpoint; retained for an explicit old-client response."""
     await _get_workflow(request, workflow_id)
-    raise HTTPException(status_code=410, detail="自动修复已停用；请查看分析报告中的修改/处理意见。")
+    raise HTTPException(status_code=410, detail="旧版修复重试入口已停用；请重新分析，当前修改阶段只执行本次已确认备注。")
 
 
 @router.post("/{workflow_id}/retry-note", response_model=BugWorkflowResponse, status_code=202)
@@ -558,27 +561,82 @@ async def accept_bug_workflow(workflow_id: str, request: Request) -> BugWorkflow
 
 @router.post("/{workflow_id}/rollback", response_model=BugWorkflowResponse)
 async def rollback_bug_workflow(workflow_id: str, request: Request) -> BugWorkflowResponse:
-    """Restore only the files changed by this completed automated repair."""
-    owner_user_id, workflow = await _get_workflow(request, workflow_id)
-    if workflow.get("status") != "awaiting_acceptance":
-        raise HTTPException(status_code=409, detail="Bug workflow is not ready for rollback")
-    rollback = workflow.get("rollback")
-    if not isinstance(rollback, dict) or not rollback.get("available"):
-        raise HTTPException(status_code=409, detail="This repair has no safe rollback snapshot")
-    if rollback.get("completed"):
-        raise HTTPException(status_code=409, detail="This repair has already been rolled back")
-    try:
-        restored = await asyncio.to_thread(rollback_repair, rollback)
-    except (RuntimeError, ValueError) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    rolled_back = await _persist_transition(
-        request,
-        workflow_id=workflow_id,
-        owner_user_id=owner_user_id,
-        workflow=workflow,
-        status="rolled_back",
-        event_type="repair_rolled_back",
-        summary="回退本次自动修复",
-        details={"rollback": restored},
-    )
-    return _response(rolled_back)
+    """Revert the exact selected workflow and retain its forward snapshot."""
+    return await _change_workflow_code(workflow_id, request, restore=False)
+
+
+@router.post("/{workflow_id}/restore", response_model=BugWorkflowResponse)
+async def restore_bug_workflow(workflow_id: str, request: Request) -> BugWorkflowResponse:
+    """Restore this workflow's recorded modification without another model call."""
+    return await _change_workflow_code(workflow_id, request, restore=True)
+
+
+async def _change_workflow_code(workflow_id: str, request: Request, *, restore: bool) -> BugWorkflowResponse:
+    lock = _REPAIR_ACTION_LOCKS.setdefault(workflow_id, asyncio.Lock())
+    async with lock:
+        owner, workflow = await _get_workflow(request, workflow_id)
+        if workflow.get("status") not in {"awaiting_acceptance", "note_written", "failed", "cancelled", "accepted", "rolled_back"}:
+            raise HTTPException(status_code=409, detail="当前任务尚未结束，不能回退或恢复代码")
+        snapshot = workflow.get("rollback")
+        if not isinstance(snapshot, dict) or not snapshot.get("available"):
+            raise HTTPException(status_code=409, detail="本次任务没有可操作的代码修改快照")
+        action = "restore" if restore else "rollback"
+        if not snapshot.get("pending_action"):
+            if not restore and snapshot.get("completed"):
+                return _response(workflow)
+            if restore and not snapshot.get("completed") and (workflow.get("last_event") or {}).get("event_type") == "repair_restored":
+                return _response(workflow)
+        try:
+            prepared = await asyncio.to_thread(prepare_repair_change, snapshot, restore=restore)
+            prepared.setdefault("applied_status", workflow.get("status") if workflow.get("status") != "rolled_back" else "note_written")
+            # Persist both sides before changing source, including old snapshots
+            # whose forward contents are captured on their first rollback.
+            workflow = await _persist_transition(
+                request,
+                workflow_id=workflow_id,
+                owner_user_id=owner,
+                workflow=workflow,
+                status=str(workflow["status"]),
+                event_type=f"repair_{action}_prepared",
+                summary="已保存回退／恢复所需的文件快照",
+                details={"rollback": prepared},
+            )
+            task = asyncio.create_task(asyncio.to_thread(restore_repair if restore else rollback_repair, prepared))
+            cancelled = False
+            try:
+                changed = await asyncio.shield(task)
+            except asyncio.CancelledError:
+                changed = await task
+                cancelled = True
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        files = [f"{changed.get('repository') or 'repository'}/{entry['path']}" for entry in changed["files"]]
+        verb = "恢复" if restore else "回退"
+        report = f"Bug #{workflow['bug_id']}：已{verb}本次修改，共 {len(files)} 个文件。\n" + "\n".join(files)
+        result = await _persist_transition(
+            request,
+            workflow_id=workflow_id,
+            owner_user_id=owner,
+            workflow=workflow,
+            status=str(changed["applied_status"]) if restore else "rolled_back",
+            event_type="repair_restored" if restore else "repair_rolled_back",
+            summary=f"已{verb}本次修改，共 {len(files)} 个文件",
+            details={"rollback": changed, "completion_report": report},
+        )
+        if cancelled:
+            raise asyncio.CancelledError
+        return _response(result)
+
+
+@router.post("/by-bug/{bug_id}/{action}", response_model=BugWorkflowResponse)
+async def change_latest_bug_code(bug_id: int, action: Literal["rollback", "restore"], request: Request) -> BugWorkflowResponse:
+    """Use the latest actual modification, never a later zero-change analysis."""
+    owner = await get_current_user(request)
+    if not owner:
+        raise HTTPException(status_code=401, detail="Authentication is required")
+    if bug_id <= 0:
+        raise HTTPException(status_code=422, detail="请提供有效 Bug 编号")
+    result = await read_bug_workbench(get_thread_store(request), owner_user_id=owner, scope="latest_change", bug_id=bug_id)
+    if not result.items:
+        raise HTTPException(status_code=404, detail=f"Bug #{bug_id} 没有本账号可回退或恢复的代码修改记录")
+    return await _change_workflow_code(str(result.items[0]["id"]), request, restore=action == "restore")

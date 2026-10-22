@@ -6,22 +6,38 @@ The added `app/gateway/bug_*` modules implement the personal evidence-driven
 investigation and verified-note showcase. State ownership remains in
 `bug_workflow_state.py`, business orchestration in `bug_workflow.py`, bounded
 source navigation in `bug_source_retrieval.py`, and the single read-only Codex
-investigation/report boundary in `bug_codex_summary.py`. New tasks stop after
-verified note writeback; they do not launch OpenHands or automatic repair.
+investigation/report boundary in `bug_codex_summary.py`. After verified note
+writeback, optional `bug_note_repair.py` execution applies only explicit local
+changes from this run's `analysis_report` section four, never a reused historical
+note. The public example disables repair. New tasks do not launch OpenHands.
 Read `../docs/personal/SOURCE_MAP.md` and the redaction limitations before edits.
 Enterprise data, private Agent files and customized business fixtures are absent.
 The public baseline tests below are not proof of this edition's compatibility.
 
-Current public snapshot (2026-10-13): `bug_codex_summary.py` gates optional
+Current public snapshot (2026-10-22): `bug_codex_summary.py` gates optional
 `examplewiki` access on an evidence-backed embedded fault hypothesis and checks
 report responsibility consistency. Eight fictional read tools are allowlisted;
 credentials are runtime-only. `bug_attachment_evidence.py` has a separate
-ephemeral tool-free visual extraction turn. `bug_log_query_runtime.py` streams
-accepted sources into private indexes and preserves bounded complete member
-sets. Retrieval ranks each evidence view before file-level fusion. History is
+ephemeral tool-free visual extraction turn, with the legacy extractor removed
+from this public edition. `bug_log_query_runtime.py` streams accepted sources
+into private SQLite indexes while preserving physical line and segment locations.
+`bug_log_expert.py` selects source/line references in a fresh read-only Codex turn;
+the backend restores complete redacted original records, without a fixed record
+quota or the retired signal-ranking/excerpt-merging pipeline. Retrieval preserves
+provenance tiers through every cut and file-level fusion; product configuration
+filters source scope but never manufactures candidates. History is
 conditional on an explicit regression/version question or a known direct change
 at a verified fault target. The SDK read-only sandbox is not host-wide read
 isolation. Offline public contracts live in `../tests/public_release/`.
+
+`bug_note_repair.py` registers the complete explicit local-requirement list before
+staging exact edits, then persists item reasons, `repair_outcome` and actual files.
+Successful changes survive partial/incomplete execution; the serial batch can
+continue. It exposes no shell, tests, Git commit, MCP or fresh investigation.
+`bug_rollback.py` owns before/after snapshots and owner-scoped rollback/restore;
+content conflicts preserve subsequent work and these actions never invoke a model.
+`repairing` is nonterminal and `note_written` is terminal after optional execution;
+terminal workflow state does not imply every repair item was completed.
 
 This file provides guidance to AI coding agents (Claude Code, Codex, and others) when working with code in this repository. It is the source of truth; the sibling `CLAUDE.md` imports it via `@AGENTS.md`.
 

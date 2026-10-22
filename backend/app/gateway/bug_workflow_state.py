@@ -79,6 +79,11 @@ class BugWorkflowState(TypedDict, total=False):
     repair_run_id: str
     repair_engine: str
     repair_report: str
+    repair_outcome: Literal["completed", "partial", "incomplete", "not_required"]
+    repair_items: list[dict[str, Any]]
+    patch_executor_model: str
+    patch_executor_model_call_count: int
+    patch_executor_token_usage: dict[str, int]
     changed_files: list[str]
     rollback: dict[str, Any]
     awaiting_clarification: bool

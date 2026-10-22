@@ -17,8 +17,8 @@ class CreateBugWorkflowRequest(BaseModel):
     bug_id: int = Field(gt=0)
     channel_key: str | None = Field(default=None, min_length=1, max_length=512)
     idempotency_key: str | None = Field(default=None, min_length=1, max_length=160)
-    # Compatibility field: requesting execution is rejected, never silently honored.
-    auto_repair: bool = False
+    # Omission uses the operator's repair setting; false is analysis-only.
+    auto_repair: bool | None = None
 
 
 class SubmitClarificationRequest(BaseModel):
@@ -31,6 +31,8 @@ class RollbackStatus(BaseModel):
     completed: bool = False
     files: list[str] = []
     reason: str | None = None
+    restorable: bool = False
+    pending_action: Literal["rollback", "restore"] | None = None
 
 
 class BugWorkflowResponse(BaseModel):
@@ -137,6 +139,8 @@ class BugWorkflowResponse(BaseModel):
     review_target_status: Literal["proven", "needs_confirmation"] | None = None
     review_target_reason: str | None = None
     repair_report: str | None = None
+    repair_outcome: Literal["completed", "partial", "incomplete", "not_required"] | None = None
+    repair_items: list[dict[str, Any]] = Field(default_factory=list)
     rollback: RollbackStatus | None = None
     note_thread_id: str | None = None
     note_run_id: str | None = None
@@ -169,6 +173,7 @@ class BugWorkflowResponse(BaseModel):
             "review_execution_failed",
             "note_generation_failed",
             "note_write_failed",
+            "repair_execution_failed",
             "workflow_failed",
         ]
         | None

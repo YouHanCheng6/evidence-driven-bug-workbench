@@ -50,6 +50,8 @@ _GENERIC_TERMS = frozenset(
 )
 _IDENTIFIER = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z_][A-Za-z0-9_]{3,}(?![A-Za-z0-9_])")
 _API_PATH = re.compile(r"(?<![A-Za-z0-9_])/(?:[A-Za-z0-9_~.-]+/)+[A-Za-z0-9_~.-]+")
+_ABSOLUTE_URL = re.compile(r"https?://[^\s<>()\[\]{}]+", re.IGNORECASE)
+_DOCUMENT_LINK_PATH = re.compile(r"^/(?:wiki|docx?|docs?|sheets?|base|drive|file|pages?)(?:/|$)", re.IGNORECASE)
 _REGEX_META = re.compile(r"([\\.^$|?*+()\[\]{}])")
 _NOISY_IDENTIFIER = re.compile(r"^(?:APP|L)[_-]?\d+$", re.IGNORECASE)
 _GENERIC_IDENTIFIERS = frozenset(
@@ -115,7 +117,7 @@ _CONCEPT_STOPWORDS = _GENERIC_TERMS | frozenset(
 _PRODUCT_TOKEN = re.compile(r"(?<![A-Za-z0-9])(?:[A-Za-z]\d{2,}[A-Za-z]?|\d{3}[A-Za-z]?)(?:-\d+)?(?![A-Za-z0-9])")
 _EXPLICIT_PATH_PRODUCT = re.compile(
     r"(?:(?:modules/config/|exampleModuleConfig_)(?P<token>[A-Za-z]?\d{2,}[A-Za-z]?)|"
-    r"projects/com\.loock\.(?P<project>[A-Za-z0-9_-]+))",
+    r"projects/com\.example\.(?P<project>[A-Za-z0-9_-]+))",
     re.IGNORECASE,
 )
 _SOURCE_SUFFIXES = frozenset({".java", ".kt", ".m", ".mm", ".swift", ".js", ".jsx", ".ts", ".tsx"})
@@ -197,10 +199,44 @@ def _iter_text(value: Any):
 
 def _iter_api_paths(value: Any):
     for text in _iter_text(value):
-        for match in _API_PATH.finditer(text):
-            endpoint = match.group(0).rstrip(".,;:")
-            if len(endpoint) <= 80:
+        seen: set[str] = set()
+        # Keep a real request path even when the ticket writes its absolute URL,
+        # while excluding common document/navigation links from source anchors.
+        for url_match in _ABSOLUTE_URL.finditer(text):
+            url = url_match.group(0).rstrip(".,;:，。；")
+            endpoint = urlsplit(url).path.rstrip("/")
+            if endpoint and len(endpoint) <= 80 and _API_PATH.fullmatch(endpoint) and not _DOCUMENT_LINK_PATH.match(endpoint):
+                seen.add(endpoint)
                 yield endpoint
+        without_urls = _ABSOLUTE_URL.sub(" ", text)
+        for match in _API_PATH.finditer(without_urls):
+            endpoint = match.group(0).rstrip(".,;:")
+            if len(endpoint) <= 80 and endpoint not in seen:
+                yield endpoint
+
+
+def _without_runtime_identities(value: Any, identifiers: Sequence[str]) -> Any:
+    """Project the upstream identity classification into a source-only view."""
+    if not identifiers:
+        return value
+    if isinstance(value, str):
+        cleaned = value
+        for identifier in sorted(identifiers, key=len, reverse=True):
+            cleaned = re.sub(
+                rf"(?<![A-Za-z0-9-]){re.escape(identifier)}(?![A-Za-z0-9-])",
+                " ",
+                cleaned,
+                flags=re.IGNORECASE,
+            )
+        return re.sub(r"[ \t]+", " ", cleaned).strip()
+    if isinstance(value, Mapping):
+        # Explicit source contracts outrank the same token's incidental
+        # appearance in a device/precondition line. They remain available to
+        # exact source navigation instead of being reclassified as a serial.
+        return {key: item if str(key) in {"resource_keys", "event_ids", "api_endpoints"} else _without_runtime_identities(item, identifiers) for key, item in value.items()}
+    if isinstance(value, Sequence) and not isinstance(value, (bytes, bytearray, str)):
+        return [_without_runtime_identities(item, identifiers) for item in value]
+    return value
 
 
 def build_retrieval_query(
@@ -224,8 +260,11 @@ def build_retrieval_query(
             if not any(existing == text for _existing_score, existing in ranked):
                 ranked.append((score, text))
 
-    for key in ("title", "description", "steps", "actual", "expected"):
-        add(160, list(_iter_api_paths(bug_snapshot.get(key))))
+    # ``query_facts`` is the only interpreted view of the flattened ZenTao
+    # body.  Do not re-read description/steps/actual/expected here: doing so
+    # reintroduces the same template prose with conflicting roles after the
+    # preparation layer has already separated it.
+    add(160, list(_iter_api_paths(bug_snapshot.get("title"))))
     for key in (
         "actual_texts",
         "expected_texts",
@@ -241,10 +280,16 @@ def build_retrieval_query(
     # The ticket states the behavior being investigated. Keep that semantic
     # center ahead of visual scene descriptions, which usually describe where
     # something was seen rather than the code path that produced the failure.
-    for key, score in (("title", 135), ("actual", 125), ("expected", 125), ("description", 95), ("steps", 85)):
-        add(score, bug_snapshot.get(key))
-    for key in ("actual_texts", "expected_texts", "resource_keys", "event_ids"):
-        add(110, list(_iter_text(query_facts.get(key)))[:4])
+    add(135, bug_snapshot.get("title"))
+    for key, score in (
+        ("actual_texts", 125),
+        ("expected_texts", 125),
+        ("entry_actions", 110),
+        ("resource_keys", 110),
+        ("event_ids", 110),
+        ("ticket_texts", 95),
+    ):
+        add(score, list(_iter_text(query_facts.get(key)))[:4])
     for key in ("pages_or_regions", "user_paths", "visible_controls", "event_or_actions"):
         add(55, list(_iter_text(query_facts.get(key)))[:2])
 
@@ -363,91 +408,17 @@ def _code_duty_anchor_terms(*, bug_snapshot: Mapping[str, Any], query_facts: Map
     return terms[:12]
 
 
-def _enrich_query_with_navigation(query: str, terms: Sequence[str], *, max_chars: int) -> str:
-    """Append only current-checkout navigation identities to Tabby's query."""
-    parts = query.splitlines()
-    seen = {part.casefold() for part in parts}
-    used = len(query)
-    for value in terms:
-        text = re.sub(r"\s+", " ", str(value or "")).strip(" \t\r\n，。；：、|[]【】")
-        folded = text.casefold()
-        if len(text) < 2 or len(text) > 80 or folded in seen or folded in _GENERIC_TERMS:
-            continue
-        cost = len(text) + (1 if parts else 0)
-        if used + cost > max_chars:
-            continue
-        parts.append(text)
-        seen.add(folded)
-        used += cost
-    return "\n".join(parts)
-
-
-def build_module_intent_query(
+def build_retrieval_anchors(
     *,
-    bug_snapshot: Mapping[str, Any],
+    query: str,
     query_facts: Mapping[str, Any],
-    max_chars: int = 1_600,
-) -> str:
-    """Build the ticket-led query used only to rank product modules.
-
-    Runtime logs remain available to repository retrieval and model/config
-    resolution, but they must not choose the primary UI/business module. A log
-    commonly describes a downstream native consumer rather than the surface
-    where the reported action starts.
-    """
-    parts: list[str] = []
-    seen: set[str] = set()
-    used = 0
-
-    def add(label: str, value: Any, *, limit: int) -> None:
-        nonlocal used
-        added = 0
-        for raw in _iter_text(value):
-            text = raw.strip(" \t\r\n，。；：、|[]【】")
-            folded = text.casefold()
-            if len(text) < 2 or folded in _GENERIC_TERMS or folded in seen:
-                continue
-            text = text[:240]
-            rendered = f"{label}：{text}"
-            cost = len(rendered) + (1 if parts else 0)
-            if used + cost > max_chars:
-                continue
-            seen.add(folded)
-            parts.append(rendered)
-            used += cost
-            added += 1
-            if added >= limit:
-                break
-
-    add("工单标题", bug_snapshot.get("title"), limit=1)
-    for key, label, limit in (
-        ("entry_actions", "入口操作", 4),
-        ("pages_or_regions", "页面区域", 3),
-        ("user_paths", "用户路径", 3),
-        ("visible_controls", "可见控件", 3),
-        ("event_or_actions", "页面动作", 3),
-        ("actual_texts", "实际表现", 3),
-        ("expected_texts", "预期表现", 3),
-        ("resource_keys", "资源字段", 3),
-        ("event_ids", "事件字段", 3),
-    ):
-        add(label, query_facts.get(key), limit=limit)
-    for key, label, limit in (
-        ("actual", "实际结果", 2),
-        ("expected", "预期结果", 2),
-        ("steps", "复现步骤", 3),
-        ("description", "问题描述", 2),
-    ):
-        add(label, bug_snapshot.get(key), limit=limit)
-    return "\n".join(parts)
-
-
-def build_retrieval_anchors(*, query: str, query_facts: Mapping[str, Any], max_anchors: int, retrieval_aliases: Sequence[str] = ()) -> list[str]:
+    max_anchors: int,
+    retrieval_aliases: Sequence[str] = (),
+) -> list[str]:
     """Choose bounded exact anchors for Tabby's repository grep.
 
-    Resource keys and event identifiers outrank prose.  Visible UI text is
-    still useful for locating localization resources, but long reproduction
-    paragraphs are never sent as a grep expression.
+    Complete visible/action facts precede supporting identifiers. Long
+    reproduction paragraphs are never sent as a grep expression.
     """
     anchors: list[str] = []
 
@@ -457,16 +428,6 @@ def build_retrieval_anchors(*, query: str, query_facts: Mapping[str, Any], max_a
             return
         anchors.append(candidate)
 
-    for alias in retrieval_aliases:
-        add(alias)
-    for key in ("resource_keys", "event_ids"):
-        for text in _iter_text(query_facts.get(key)):
-            for identifier in _IDENTIFIER.findall(text):
-                if "_" in identifier or any(char.isupper() for char in identifier[1:]):
-                    add(identifier)
-            add(text)
-    for endpoint in _iter_api_paths(query):
-        add(endpoint)
     # Reuse preparation fields that already distinguish ticket-led actions
     # from visual scene descriptions. This changes priority inside the existing
     # bounded grep plan; it does not add another retrieval stage.
@@ -479,14 +440,29 @@ def build_retrieval_anchors(*, query: str, query_facts: Mapping[str, Any], max_a
     )
     for key, limit in prioritized_facts:
         for text in list(_iter_text(query_facts.get(key)))[:limit]:
-            for identifier in _IDENTIFIER.findall(text):
-                if len(identifier) >= 6 and ("_" in identifier or any(char.isupper() for char in identifier[1:])):
-                    add(identifier)
-    for key, limit in prioritized_facts:
-        for text in list(_iter_text(query_facts.get(key)))[:limit]:
             add(text)
             if len(anchors) >= max_anchors:
                 return anchors[:max_anchors]
+    for key in ("resource_keys", "event_ids"):
+        for text in _iter_text(query_facts.get(key)):
+            for identifier in _IDENTIFIER.findall(text):
+                if "_" in identifier or any(char.isupper() for char in identifier[1:]):
+                    add(identifier)
+            add(text)
+    for endpoint in _iter_api_paths(query):
+        add(endpoint)
+    for alias in retrieval_aliases:
+        add(alias)
+    # Identifiers remain useful, but they are supporting navigation. Keep
+    # complete action/copy facts ahead of serials and incidental code-shaped
+    # words so those identifiers cannot evict the behavior being investigated.
+    for key, limit in prioritized_facts:
+        for text in list(_iter_text(query_facts.get(key)))[:limit]:
+            for identifier in _IDENTIFIER.findall(text):
+                if len(identifier) >= 6 and ("_" in identifier or any(char.isupper() for char in identifier[1:])):
+                    add(identifier)
+                    if len(anchors) >= max_anchors:
+                        return anchors[:max_anchors]
     for line in query.splitlines():
         for identifier in _IDENTIFIER.findall(line):
             if "_" in identifier and len(identifier) >= 8:
@@ -496,6 +472,37 @@ def build_retrieval_anchors(*, query: str, query_facts: Mapping[str, Any], max_a
         if len(anchors) >= max_anchors:
             break
     return anchors[:max_anchors]
+
+
+def _normalized_anchor(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip(" \t\r\n，。；：、|[]【】`'\"")
+
+
+def _is_complete_literal_anchor(value: str) -> bool:
+    """Distinguish a visible/action fact from a generic code-shaped token."""
+    han_count = len(re.findall(r"[\u3400-\u9fff]", value))
+    return han_count >= 4 or (len(value) >= 12 and bool(re.search(r"[\s，。；：,:;!?！？]", value)))
+
+
+def _is_specific_source_identifier(value: str) -> bool:
+    """Keep generic English words usable without treating them as exact facts."""
+    if _API_PATH.fullmatch(value):
+        return True
+    if "_" in value or re.search(r"[a-z][A-Z]", value):
+        return True
+    return bool(value.isascii() and re.fullmatch(r"[A-Za-z][A-Za-z0-9.-]+", value) and len(value) >= 10)
+
+
+def _ticket_anchor_stage(anchor: str, query_facts: Mapping[str, Any]) -> str:
+    normalized = _normalized_anchor(anchor)
+    complete_facts = {
+        _normalized_anchor(value) for key in ("entry_actions", "ticket_texts", "actual_texts", "expected_texts", "user_paths") for value in _iter_text(query_facts.get(key)) if _is_complete_literal_anchor(_normalized_anchor(value))
+    }
+    if normalized in complete_facts or _is_complete_literal_anchor(normalized):
+        return "exact_ticket"
+    if _is_specific_source_identifier(normalized):
+        return "exact_identifier"
+    return "exact_supporting"
 
 
 def build_fallback_concepts(
@@ -508,20 +515,19 @@ def build_fallback_concepts(
 ) -> list[str]:
     """Extract bounded short concepts when exact-anchor grep returns nothing.
 
-    This is deliberately deterministic and ticket-led. Runtime-log prose has a
-    much lower weight and cannot contribute identifier-shaped terms, preventing
-    a firmware symbol from taking over navigation for a client repository.
+    This is deliberately deterministic and ticket-led. Runtime logs do not
+    contribute source-navigation terms.
     """
-    fragments: list[tuple[int, bool, str]] = []
+    fragments: list[tuple[int, str]] = []
     seen_fragments: set[str] = set()
 
-    def add(weight: int, value: Any, *, from_log: bool = False) -> None:
+    def add(weight: int, value: Any) -> None:
         for raw in _iter_text(value):
             text = re.sub(r"\s+", " ", raw).strip()
             if len(text) < 2 or text in seen_fragments:
                 continue
             seen_fragments.add(text)
-            fragments.append((weight, from_log, text))
+            fragments.append((weight, text))
 
     add(160, list(_iter_text(query_facts.get("entry_actions")))[:5])
     for key in ("actual_texts", "expected_texts", "resource_keys", "event_ids"):
@@ -529,31 +535,23 @@ def build_fallback_concepts(
     add(105, query_facts.get("user_paths"))
     for key in ("pages_or_regions", "visible_controls"):
         add(55, query_facts.get(key))
-    for key, weight in (("title", 145), ("actual", 120), ("expected", 120), ("steps", 100), ("description", 80)):
-        add(weight, bug_snapshot.get(key))
-    log_evidence = runtime_evidence.get("log_evidence")
-    if isinstance(log_evidence, Mapping):
-        accepted = log_evidence.get("accepted_evidence")
-        if isinstance(accepted, Sequence) and not isinstance(accepted, (str, bytes, bytearray)):
-            for item in accepted:
-                if isinstance(item, Mapping):
-                    add(25, item.get("summary"), from_log=True)
-
+    add(145, bug_snapshot.get("title"))
+    add(80, query_facts.get("ticket_texts"))
     # Screenshot-derived paths often repeat the same sentence at increasing
     # nesting depths. Remove only the repeated span from lower-priority copies;
     # preserve their unique suffix/prefix so screenshot-only facts are not lost.
-    compacted: list[tuple[int, bool, str]] = []
-    for fragment in sorted(fragments, key=lambda item: (-item[0], len(item[2]), item[2])):
-        weight, from_log, text = fragment
+    compacted: list[tuple[int, str]] = []
+    for fragment in sorted(fragments, key=lambda item: (-item[0], len(item[1]), item[1])):
+        weight, text = fragment
         remainder = text
         for existing in compacted:
-            if len(existing[2]) >= 6 and existing[2] in remainder:
-                remainder = remainder.replace(existing[2], " ")
+            if len(existing[1]) >= 6 and existing[1] in remainder:
+                remainder = remainder.replace(existing[1], " ")
         remainder = re.sub(r"(?:\s*[→>|]+\s*)+", " ", remainder)
         remainder = re.sub(r"\s+", " ", remainder).strip()
         if len(remainder) < 2:
             continue
-        compacted.append((weight, from_log, remainder))
+        compacted.append((weight, remainder))
     fragments = compacted
 
     exact = {str(value).casefold() for value in exact_anchors}
@@ -583,11 +581,10 @@ def build_fallback_concepts(
         contribution = weight + min(len(candidate), 8) * 3 + (90 if whole else 0)
         scores[candidate] = max(scores.get(candidate, 0.0), contribution)
 
-    for fragment_index, (weight, from_log, raw) in enumerate(fragments):
-        text = _FACT_LABEL.sub(" ", raw)
-        if not from_log:
-            for token in _ASCII_CONCEPT.findall(text):
-                record(token, weight=weight, fragment_index=fragment_index, whole=True)
+    for fragment_index, (weight, raw) in enumerate(fragments):
+        text = _ABSOLUTE_URL.sub(" ", _FACT_LABEL.sub(" ", raw))
+        for token in _ASCII_CONCEPT.findall(text):
+            record(token, weight=weight, fragment_index=fragment_index, whole=True)
         for run in _HAN_RUN.findall(text):
             pieces = [piece for piece in _CONCEPT_BREAK.split(run) if len(piece) >= 2]
             for piece in pieces:
@@ -791,8 +788,18 @@ def _runtime_config_for_model(root: Path, model: str) -> dict[str, Any] | None:
     return None
 
 
-def _module_config_overrides(payload: Mapping[str, Any]) -> dict[str, str]:
-    """Read logical-page -> concrete-component bindings from module config."""
+def _module_config_overrides(
+    payload: Mapping[str, Any],
+    *,
+    implementation_index: Mapping[str, Sequence[str]] | None = None,
+) -> dict[str, str]:
+    """Read only resolvable logical-page -> component bindings.
+
+    ``examplePageConfig.data`` also carries booleans, indexes and other feature
+    values.  Those values describe runtime behaviour; they are not page
+    overrides and must not make otherwise-equivalent product-family configs
+    look structurally different.
+    """
     overrides: dict[str, str] = {}
     modules = payload.get("modules")
     if not isinstance(modules, Sequence) or isinstance(modules, (str, bytes, bytearray)):
@@ -808,14 +815,25 @@ def _module_config_overrides(payload: Mapping[str, Any]) -> dict[str, str]:
             if not isinstance(data, Mapping):
                 continue
             for logical, concrete in data.items():
-                logical_name = str(logical or "").strip()
-                concrete_name = str(concrete or "").strip()
-                if re.fullmatch(r"[A-Za-z_$][\w$]*", logical_name) and re.fullmatch(r"[A-Za-z_$][\w$]*", concrete_name):
-                    overrides[logical_name] = concrete_name
+                if not isinstance(logical, str) or not isinstance(concrete, str):
+                    continue
+                logical_name = logical.strip()
+                concrete_name = concrete.strip()
+                if not re.fullmatch(r"[A-Za-z_$][\w$]*", logical_name) or not re.fullmatch(r"[A-Za-z_$][\w$]*", concrete_name):
+                    continue
+                if implementation_index is not None and concrete_name.casefold() not in implementation_index:
+                    continue
+                overrides[logical_name] = concrete_name
     return overrides
 
 
-def _module_config_signature(root: Path, *, model: str, payload: Mapping[str, Any]) -> tuple[Any, ...]:
+def _module_config_signature(
+    root: Path,
+    *,
+    model: str,
+    payload: Mapping[str, Any],
+    implementation_index: Mapping[str, Sequence[str]],
+) -> tuple[Any, ...]:
     """Return only current-runtime facts that must agree for family consensus."""
     modules = payload.get("modules")
     module_names = (
@@ -826,189 +844,9 @@ def _module_config_signature(root: Path, *, model: str, payload: Mapping[str, An
     runtime = _runtime_config_for_model(root, model)
     return (
         module_names,
-        tuple(sorted(_module_config_overrides(payload).items())),
+        tuple(sorted(_module_config_overrides(payload, implementation_index=implementation_index).items())),
         str((runtime or {}).get("path") or ""),
     )
-
-
-def _localized_resource_values(root: Path) -> dict[str, tuple[str, frozenset[str]]]:
-    """Read bounded Simplified-Chinese resource dictionaries across client layers."""
-    values: dict[str, tuple[str, set[str]]] = {}
-
-    def add_value(key: str, value: str, layer: str) -> None:
-        existing = values.get(key)
-        if existing is None:
-            values[key] = (value, {layer})
-        elif existing[0] == value:
-            existing[1].add(layer)
-
-    for relative in (
-        "modules/resources/lang/zh.json",
-        "modules/resources/lang/zh-CN.json",
-        "modules/resources/lang/zh_CN.json",
-    ):
-        path = root / relative
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
-        if isinstance(payload, Mapping):
-            for key, value in payload.items():
-                if isinstance(value, str):
-                    add_value(str(key), value, "shared_rn")
-            break
-
-    for path in sorted((root / "ios").glob("**/zh-Hans.lproj/Localizable.strings"))[:8]:
-        try:
-            source = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        for match in re.finditer(r'^\s*"(?P<key>[^"\\]+)"\s*=\s*"(?P<value>(?:\\.|[^"\\])*)"\s*;', source, re.MULTILINE):
-            add_value(match.group("key"), match.group("value").replace(r"\"", '"').replace(r"\n", "\n"), "ios_native")
-
-    for path in sorted((root / "android").glob("**/values-zh*/strings.xml"))[:12]:
-        try:
-            source = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        for match in re.finditer(r'<string\s+name=["\'](?P<key>[^"\']+)["\'][^>]*>(?P<value>.*?)</string>', source, re.DOTALL):
-            value = re.sub(r"<[^>]+>", "", match.group("value")).strip()
-            if value:
-                add_value(match.group("key"), value, "android_native")
-    return {key: (value, frozenset(layers)) for key, (value, layers) in values.items()}
-
-
-def _ticket_resource_navigation(root: Path, *, bug_snapshot: Mapping[str, Any], query_facts: Mapping[str, Any]) -> list[str]:
-    """Bridge ticket-visible copy to current-checkout resource keys, without choosing a model."""
-    corpus = build_module_intent_query(bug_snapshot=bug_snapshot, query_facts=query_facts)
-    navigation_corpus = "\n".join(
-        _iter_text(
-            (
-                bug_snapshot.get("title"),
-                query_facts.get("entry_actions"),
-                query_facts.get("pages_or_regions"),
-                query_facts.get("visible_controls"),
-            )
-        )
-    )
-    requested_layers = set(_requested_implementation_layers(query_facts))
-    matches = [
-        (int(bool(layers & requested_layers)), int(value in navigation_corpus), len(value), value, key)
-        for key, (value, layers) in _localized_resource_values(root).items()
-        if 2 <= len(value) <= 40 and value in corpus and not value.isdigit() and value.casefold() not in _CONCEPT_STOPWORDS and re.fullmatch(r"[A-Za-z_$][\w$]*", key)
-    ]
-    matches.sort(key=lambda item: (-item[0], -item[1], -item[2], item[3], item[4]))
-    # Different keys for the same visible text are one navigation concept.
-    # Cover distinct controls/values before spending slots on their aliases.
-    value_groups: dict[str, list[str]] = {}
-    for _layer, _navigation, _length, value, key in matches:
-        value_groups.setdefault(value, []).append(key)
-    return _allocate_anchor_queries(groups=list(value_groups.values()), limit=4)
-
-
-def _module_source_navigation(
-    *,
-    root: Path,
-    module_name: str,
-    module_overrides: Mapping[str, str],
-    runtime_config: Mapping[str, Any] | None,
-    implementation_index: Mapping[str, Sequence[str]],
-    fallback_paths: Sequence[str],
-    resources: Mapping[str, str],
-    intent_concepts: Sequence[str],
-) -> tuple[list[str], list[str], list[dict[str, str]]]:
-    """Resolve the product-bound component and its direct page transitions."""
-    terms: list[str] = []
-    paths: list[str] = []
-    relations: list[dict[str, str]] = []
-
-    def add_term(value: Any) -> None:
-        text = str(value or "").strip()
-        if len(text) >= 2 and text not in terms:
-            terms.append(text)
-
-    def add_path(value: Any) -> None:
-        relative = str(value or "").strip()
-        if relative and (root / relative).is_file() and relative not in paths:
-            paths.append(relative)
-
-    concrete_module = str(module_overrides.get(module_name) or "").strip()
-    if concrete_module:
-        add_term(module_name)
-        add_term(concrete_module)
-        for concrete_path in implementation_index.get(concrete_module.casefold(), ()):
-            add_path(concrete_path)
-            relations.append(
-                {
-                    "from": module_name,
-                    "to": concrete_module,
-                    "path": concrete_path,
-                    "kind": "module_config_override",
-                }
-            )
-
-    route_bindings = runtime_config.get("route_bindings", []) if isinstance(runtime_config, Mapping) else []
-    for binding in route_bindings if isinstance(route_bindings, Sequence) else ():
-        if not isinstance(binding, Mapping) or str(binding.get("name") or "") != module_name:
-            continue
-        add_term(binding.get("name"))
-        add_term(binding.get("component"))
-        add_term(binding.get("title"))
-        add_path(binding.get("implementation_path"))
-    direct_targets: list[dict[str, Any]] = []
-    for relative in list(paths)[:2]:
-        try:
-            source = (root / relative).read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        for match in re.finditer(
-            r"\b(?:pageNavigate|navigate|push)\s*\(\s*['\"](?P<target>[A-Za-z_$][\w$]{2,})['\"]",
-            source,
-        ):
-            target = match.group("target")
-            for target_path in implementation_index.get(target.casefold(), ()):
-                if any(item["path"] == target_path for item in direct_targets):
-                    break
-                target_terms = [target]
-                try:
-                    target_source = (root / target_path).read_text(encoding="utf-8", errors="replace")
-                except OSError:
-                    target_source = ""
-                for key in re.findall(r"\bresourceStrings\.([A-Za-z_$][\w$]*)", target_source):
-                    if key not in target_terms:
-                        target_terms.append(key)
-                    value = resources.get(key)
-                    if value and value not in target_terms:
-                        target_terms.append(value)
-                direct_targets.append(
-                    {
-                        "from": relative,
-                        "route": target,
-                        "path": target_path,
-                        "terms": target_terms,
-                        "intent_score": _module_intent_overlap(" ".join(target_terms), intent_concepts),
-                    }
-                )
-                break
-
-    direct_targets.sort(key=lambda item: (-float(item["intent_score"]), str(item["route"])))
-    for target in direct_targets:
-        add_path(target["path"])
-        for term in target["terms"]:
-            add_term(term)
-        relations.append({"from": target["from"], "route": target["route"], "to": target["path"]})
-    for relative in fallback_paths:
-        add_path(relative)
-
-    for relative in list(paths)[:4]:
-        try:
-            source = (root / relative).read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        for key in re.findall(r"\bresourceStrings\.([A-Za-z_$][\w$]*)", source):
-            add_term(key)
-            add_term(resources.get(key))
-    return paths[:6], terms[:16], relations[:8]
 
 
 def _legacy_project_bindings(root: Path) -> dict[str, str]:
@@ -1110,7 +948,7 @@ def _project_override_conflicts_with_declared_product(
     declared_products: set[str],
 ) -> bool:
     """Reject an explicitly different product override, never shared source."""
-    match = re.match(r"projects/com\.loock\.(?P<project>[^/]+)/", path, re.IGNORECASE)
+    match = re.match(r"projects/com\.example\.(?P<project>[^/]+)/", path, re.IGNORECASE)
     if not match or not declared_products:
         return False
     project = match.group("project").casefold()
@@ -1162,26 +1000,11 @@ def _resolve_legacy_project(root: Path, *, snapshot: Mapping[str, Any], corpus: 
 
 def _module_search_corpus(*, bug_snapshot: Mapping[str, Any], query_facts: Mapping[str, Any], query: str) -> str:
     values: list[str] = [query]
-    for key in ("product", "module", "title", "description", "steps", "actual", "expected", "device_model", "model"):
+    for key in ("product", "module", "title", "device_model", "model"):
         values.extend(_iter_text(bug_snapshot.get(key)))
-    for key in ("pages_or_regions", "visible_controls", "event_or_actions", "resource_keys", "actual_texts", "expected_texts"):
+    for key in ("entry_actions", "pages_or_regions", "user_paths", "visible_controls", "event_or_actions", "resource_keys", "actual_texts", "expected_texts", "ticket_texts"):
         values.extend(_iter_text(query_facts.get(key)))
     return "\n".join(values).casefold()
-
-
-def _module_relevance(name: str, nickname: str, corpus: str) -> int:
-    score = 0
-    if name and name.casefold() in corpus:
-        score += 240
-    if nickname and nickname.casefold() in corpus:
-        score += 220
-    compact = re.sub(r"(?:设置|管理|功能|首页|页面|页)$", "", nickname).strip()
-    if len(compact) >= 2 and compact.casefold() in corpus:
-        score += 160
-    for concept in _HAN_RUN.findall(nickname):
-        if len(concept) >= 2 and concept.casefold() in corpus:
-            score += min(100, len(concept) * 18)
-    return score
 
 
 def _module_implementation_index(root: Path) -> dict[str, list[str]]:
@@ -1197,99 +1020,107 @@ def _module_implementation_index(root: Path) -> dict[str, list[str]]:
     return index
 
 
-def _module_profile(
-    *,
-    root: Path,
-    name: str,
-    nickname: str,
-    paths: Sequence[str],
-    concepts: Sequence[str] = (),
-    navigation_terms: Sequence[str] = (),
-) -> str:
-    """Build a bounded current-source description used only to rank enabled modules."""
-    parts = [f"模块名 {name}", f"模块昵称 {nickname}"]
-    if navigation_terms:
-        parts.append("当前产品源码导航 " + " ".join(navigation_terms[:16]))
-    for relative in list(paths)[:2]:
+def _source_dependencies(root: Path, relative_path: str) -> list[str]:
+    """Resolve checkout-local static imports used for conservative reachability."""
+    owner = (root / relative_path).resolve(strict=False)
+    try:
+        source = owner.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    imports = re.findall(
+        r"(?:\bfrom\s+|\brequire\s*\(\s*|\bimport\s*\(\s*)['\"](?P<path>[^'\"]+)['\"]",
+        source,
+    )
+    dependencies: list[str] = []
+    for import_path in imports:
+        target = _resolve_relative_source(root, owner, import_path)
+        if target is None and not import_path.startswith("."):
+            target = _resolve_relative_source(root, root / "__root__.js", f"./{import_path}")
+        if target is not None:
+            relative = target.relative_to(root).as_posix()
+            if relative not in dependencies:
+                dependencies.append(relative)
+    return dependencies
+
+
+def _reachable_sources(root: Path, roots: Sequence[str], *, blocked_roots: Sequence[str] = ()) -> set[str]:
+    """Follow only literal checkout-local imports; unresolved edges stay unknown."""
+    reachable: set[str] = set()
+    blocked = {str(path) for path in blocked_roots if str(path).strip()}
+    pending = list(dict.fromkeys(str(path) for path in roots if str(path).strip()))
+    while pending:
+        relative = pending.pop()
+        if relative in reachable or relative in blocked:
+            continue
         path = root / relative
-        try:
-            source = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
+        if not path.is_file() or path.suffix.casefold() not in _SOURCE_SUFFIXES:
             continue
-        parts.append(f"源码路径 {relative}")
-        excerpts = [source[:3_000]]
-        seen_offsets: list[int] = []
-        folded = source.casefold()
-        for concept in concepts:
-            offset = folded.find(concept.casefold())
-            if offset < 0 or any(abs(offset - previous) < 800 for previous in seen_offsets):
-                continue
-            seen_offsets.append(offset)
-            excerpts.append(source[max(0, offset - 700) : offset + 1_100])
-            if sum(len(excerpt) for excerpt in excerpts) >= 10_000:
-                break
-        parts.extend(excerpts)
-    return re.sub(r"[ \t]+", " ", "\n".join(parts)).strip()[:12_000]
+        reachable.add(relative)
+        pending.extend(dependency for dependency in _source_dependencies(root, relative) if dependency not in reachable)
+    return reachable
 
 
-def _module_profile_overlap(profile: str, concepts: Sequence[str]) -> int:
-    folded = profile.casefold()
-    return sum(45 + min(len(concept), 8) * 8 for concept in concepts if concept.casefold() in folded)
-
-
-def _module_intent_concepts(*, bug_snapshot: Mapping[str, Any], query_facts: Mapping[str, Any]) -> list[str]:
-    """Extract bounded Chinese page/action phrases for module-profile matching."""
-    values: list[str] = []
-    for key in ("title", "actual", "expected", "steps", "description"):
-        values.extend(_iter_text(bug_snapshot.get(key)))
-    for key in (
-        "entry_actions",
-        "pages_or_regions",
-        "user_paths",
-        "visible_controls",
-        "event_or_actions",
-        "actual_texts",
-        "expected_texts",
-    ):
-        values.extend(_iter_text(query_facts.get(key)))
-    concepts: list[str] = []
-    for value in values:
-        for run in _HAN_RUN.findall(value):
-            for size in range(min(8, len(run)), 3, -1):
-                for offset in range(0, len(run) - size + 1):
-                    concept = run[offset : offset + size]
-                    if concept not in concepts:
-                        concepts.append(concept)
-                    if len(concepts) >= 96:
-                        return concepts
-    return concepts
-
-
-def _module_intent_overlap(profile: str, concepts: Sequence[str]) -> int:
-    folded = profile.casefold()
-    matches = [concept for concept in concepts if concept.casefold() in folded]
-    matches.sort(key=lambda value: (-len(value), value))
-    selected: list[str] = []
-    for concept in matches:
-        if any(concept in existing for existing in selected):
+def _implementation_bindings(
+    root: Path,
+    *,
+    model: str,
+    payload: Mapping[str, Any],
+    implementation_index: Mapping[str, Sequence[str]],
+) -> dict[str, set[str]]:
+    """Return exact logical-slot bindings declared by current checkout source."""
+    bindings: dict[str, set[str]] = {}
+    runtime = _runtime_config_for_model(root, model)
+    for binding in (runtime or {}).get("route_bindings", []):
+        if not isinstance(binding, Mapping):
             continue
-        selected.append(concept)
-        if len(selected) >= 8:
-            break
-    return min(320, sum((len(concept) - 3) * 30 for concept in selected))
-
-
-def _matched_module_intents(profile: str, concepts: Sequence[str], *, limit: int = 3) -> list[str]:
-    folded = profile.casefold()
-    matches = sorted((concept for concept in concepts if concept.casefold() in folded), key=lambda value: (-len(value), value))
-    selected: list[str] = []
-    for concept in matches:
-        if any(concept in existing for existing in selected):
+        logical = str(binding.get("name") or "").strip()
+        path = str(binding.get("implementation_path") or "").strip()
+        if logical and path:
+            bindings.setdefault(logical, set()).add(path)
+    for logical, concrete in _module_config_overrides(payload, implementation_index=implementation_index).items():
+        if logical in bindings:
             continue
-        selected.append(concept)
-        if len(selected) >= limit:
-            break
-    return selected
+        paths = {str(path) for path in implementation_index.get(concrete.casefold(), []) if str(path).strip()}
+        if paths:
+            bindings[logical] = paths
+    return bindings
+
+
+def _product_reachability(
+    root: Path,
+    *,
+    selected_model: str,
+    selected_payload: Mapping[str, Any],
+    available_configs: Sequence[tuple[str, str, Mapping[str, Any]]],
+    implementation_index: Mapping[str, Sequence[str]],
+) -> dict[str, list[str]]:
+    """Separate selected and provably competing implementations without guessing."""
+    selected_bindings = _implementation_bindings(
+        root,
+        model=selected_model,
+        payload=selected_payload,
+        implementation_index=implementation_index,
+    )
+    selected_roots = {path for paths in selected_bindings.values() for path in paths}
+    unselected_roots: set[str] = set()
+    for model, _config_path, payload in available_configs:
+        if model == selected_model:
+            continue
+        bindings = _implementation_bindings(root, model=model, payload=payload, implementation_index=implementation_index)
+        for logical, paths in bindings.items():
+            if logical in selected_bindings:
+                unselected_roots.update(paths - selected_bindings[logical])
+    # Global route registries import mutually exclusive product pages together.
+    # A selected implementation may depend on that registry for navigation, but
+    # this must not make every registered alternative reachable for the product.
+    selected_reachable = _reachable_sources(root, sorted(selected_roots), blocked_roots=sorted(unselected_roots))
+    unselected_reachable = _reachable_sources(root, sorted(unselected_roots))
+    return {
+        "selected_implementation_roots": sorted(selected_roots),
+        "unselected_implementation_roots": sorted(unselected_roots),
+        "selected_reachable_paths": sorted(selected_reachable),
+        "unselected_only_paths": sorted(unselected_reachable - selected_reachable),
+    }
 
 
 def resolve_module_architecture(
@@ -1310,14 +1141,13 @@ def resolve_module_architecture(
     if repository not in {"sample_mobile_repo", "sample_platform_repo"}:
         return {"status": "not_applicable", "reason": "module_architecture_not_present", "modules": [], "anchors": []}
     resolution_corpus = _module_search_corpus(bug_snapshot=bug_snapshot, query_facts=query_facts, query=query)
-    module_intent_query = build_module_intent_query(bug_snapshot=bug_snapshot, query_facts=query_facts)
-    module_intent_corpus = module_intent_query.casefold()
     legacy_resolution = _resolve_legacy_project(root, snapshot=bug_snapshot, corpus=resolution_corpus)
     if not (root / "moduleControl").is_dir() or not (root / "modules").is_dir():
         return legacy_resolution or {"status": "unresolved", "reason": "module_architecture_not_present", "modules": [], "anchors": []}
     bindings = _module_config_bindings(root)
     if not bindings:
         return legacy_resolution or {"status": "unresolved", "reason": "model_config_bindings_not_found", "modules": [], "anchors": []}
+    implementation_index = _module_implementation_index(root)
 
     product_tokens = set(build_product_scope_tokens(bug_snapshot))
     available_configs: list[tuple[str, str, Mapping[str, Any]]] = []
@@ -1350,7 +1180,7 @@ def resolve_module_architecture(
             if len(token) >= 3 and (suffix := Path(relative).stem.removeprefix("exampleModuleConfig_").casefold()).startswith(token) and len(suffix) > len(token) and suffix[len(token)].isalpha()
         ]
         family_configs = list({relative: (model, relative, payload) for model, relative, payload in family_configs}.values())
-        signatures = {_module_config_signature(root, model=model, payload=payload) for model, _relative, payload in family_configs}
+        signatures = {_module_config_signature(root, model=model, payload=payload, implementation_index=implementation_index) for model, _relative, payload in family_configs}
         if family_configs and len(signatures) == 1:
             ranked_configs = [(180, model, relative, payload) for model, relative, payload in family_configs]
             match_basis = "current_checkout_product_family_consensus"
@@ -1363,105 +1193,32 @@ def resolve_module_architecture(
     matched_models = [item[1] for item in ranked_configs]
     matched_config_paths = list(dict.fromkeys(item[2] for item in ranked_configs))
 
-    implementation_index = _module_implementation_index(root)
     runtime_config = _runtime_config_for_model(root, model)
-    module_overrides = _module_config_overrides(payload)
-    localized_resources = {key: value for key, (value, _layers) in _localized_resource_values(root).items()}
-    concepts = build_fallback_concepts(
-        bug_snapshot=bug_snapshot,
-        query_facts=query_facts,
-        runtime_evidence={},
-        exact_anchors=[],
-        max_concepts=8,
+    module_overrides = _module_config_overrides(payload, implementation_index=implementation_index)
+    product_reachability = _product_reachability(
+        root,
+        selected_model=model,
+        selected_payload=payload,
+        available_configs=available_configs,
+        implementation_index=implementation_index,
     )
-    intent_concepts = _module_intent_concepts(bug_snapshot=bug_snapshot, query_facts=query_facts)
-    module_candidates: list[dict[str, Any]] = []
-    for raw_module in payload.get("modules", []) if isinstance(payload, Mapping) else []:
+    raw_modules = payload.get("modules", []) if isinstance(payload, Mapping) else []
+    configured_module_names: list[str] = []
+    enabled_module_paths: list[str] = []
+    for raw_module in raw_modules:
         if not isinstance(raw_module, Mapping):
             continue
         name = str(raw_module.get("name") or "").strip()
-        nickname = str(raw_module.get("nickname") or "").strip()
         if not name:
             continue
-        fallback_paths = implementation_index.get(name.casefold(), [])
-        paths, navigation_terms, navigation_relations = _module_source_navigation(
-            root=root,
-            module_name=name,
-            module_overrides=module_overrides,
-            runtime_config=runtime_config,
-            implementation_index=implementation_index,
-            fallback_paths=fallback_paths,
-            resources=localized_resources,
-            intent_concepts=intent_concepts,
-        )
-        profile = _module_profile(
-            root=root,
-            name=name,
-            nickname=nickname,
-            paths=paths,
-            concepts=(*concepts, *intent_concepts),
-            navigation_terms=navigation_terms,
-        )
-        identity_relevance = _module_relevance(name, nickname, module_intent_corpus)
-        support_relevance = _module_profile_overlap(profile, concepts)
-        business_relevance = identity_relevance + _module_intent_overlap(profile, intent_concepts)
-        matched_intents = _matched_module_intents(profile, intent_concepts)
-        profile_relevance = support_relevance + business_relevance
-        module_candidates.append(
-            {
-                "filepath": paths[0] if paths else config_path,
-                "content": profile,
-                "score": float(identity_relevance + profile_relevance),
-                "module_name": name,
-                "module_nickname": nickname,
-                "implementation_paths": paths[:4],
-                "navigation_terms": navigation_terms,
-                "navigation_relations": navigation_relations,
-                "intent_score": float(business_relevance),
-                "intent_anchors": matched_intents,
-                "selection_basis": "module_identity" if identity_relevance else "source_profile_overlap" if profile_relevance else "product_config",
-                "retrieval_stage": "module_profile",
-            }
-        )
-
-    configured_module_count = len(module_candidates)
-    selection_status = "lexical_fallback"
-    if config is not None and module_candidates:
-        module_candidates, selection_status = _semantic_rank(
-            query=module_intent_query[:2_400] or query[:2_400],
-            items=module_candidates,
-            config=config,
-            timeout=float(getattr(config, "timeout_seconds", 12.0)),
-        )
-    else:
-        module_candidates.sort(key=lambda item: (-float(item.get("score") or 0.0), str(item.get("module_name") or "")))
-
-    modules = []
-    for candidate in module_candidates[:4]:
-        semantic_score = candidate.get("semantic_score")
-        intent_score = candidate.get("intent_score", 0.0)
-        modules.append(
-            {
-                "name": str(candidate.get("module_name") or ""),
-                "nickname": str(candidate.get("module_nickname") or ""),
-                "implementation_paths": list(candidate.get("implementation_paths") or []),
-                "navigation_terms": list(candidate.get("navigation_terms") or []),
-                "navigation_relations": list(candidate.get("navigation_relations") or []),
-                "selection_basis": "semantic_module_profile" if isinstance(semantic_score, (int, float)) else str(candidate.get("selection_basis") or "product_config"),
-                "semantic_score": float(semantic_score) if isinstance(semantic_score, (int, float)) else None,
-                "intent_score": float(intent_score) if isinstance(intent_score, (int, float)) else 0.0,
-                "intent_anchors": list(candidate.get("intent_anchors") or []),
-                "profile_excerpt": str(candidate.get("content") or "")[:600],
-            }
-        )
-    selected_navigation_terms = list(dict.fromkeys(term for module_rank, module in enumerate(modules) if module_rank == 0 or module.get("intent_anchors") for term in module.get("navigation_terms", []) if str(term).strip()))[:16]
-    anchors = [
-        *selected_navigation_terms,
-        *(module["name"] for module in modules),
-        *(anchor for module in modules for anchor in module.get("intent_anchors", [])),
-        model,
-        Path(config_path).stem,
-    ]
+        configured_module_names.append(name)
+        for path in implementation_index.get(name.casefold(), []):
+            if path not in enabled_module_paths:
+                enabled_module_paths.append(path)
+    for concrete_name in module_overrides.values():
+        for path in implementation_index.get(concrete_name.casefold(), []):
+            if path not in enabled_module_paths:
+                enabled_module_paths.append(path)
     return {
         "status": "ready",
         "architecture_kind": "module_config",
@@ -1471,13 +1228,13 @@ def resolve_module_architecture(
         "config_paths": matched_config_paths,
         "match_basis": match_basis,
         "reachability": reachability,
-        "selection_status": selection_status,
-        "configured_module_count": configured_module_count,
-        "module_intent_query": module_intent_query,
-        "modules": modules,
-        "navigation_terms": selected_navigation_terms,
+        "configured_module_count": len(configured_module_names),
+        "configured_module_names": configured_module_names,
+        "enabled_module_paths": enabled_module_paths,
+        **product_reachability,
         **({"runtime_config": runtime_config} if runtime_config else {}),
-        "anchors": list(dict.fromkeys(anchors)),
+        "modules": [],
+        "anchors": [],
     }
 
 
@@ -1617,7 +1374,10 @@ async def _collect_tabby_hybrid_items_async(
                     "returnChatCompletionRequest": False,
                     "codeSearchParamsOverride": {
                         "minEmbeddingScore": 0.0,
-                        "minBm25Score": 0.0,
+                        # Tabby applies each channel floor independently.  A
+                        # zero BM25 score is normal for a semantic-only match,
+                        # so admitting it requires a floor below zero.
+                        "minBm25Score": -1.0,
                         "minRrfScore": 0.0,
                         "numToReturn": limit,
                         "numToScore": max(limit * 2, 24),
@@ -1780,98 +1540,6 @@ def _grep_items(files: Any, *, anchor: str, anchor_rank: int, retrieval_stage: s
     return items
 
 
-def _architecture_items(
-    root: Path,
-    resolution: Mapping[str, Any],
-    *,
-    intent_terms: Sequence[str] = (),
-) -> list[dict[str, Any]]:
-    """Create exact current-source candidates for resolved product architecture."""
-    items: list[dict[str, Any]] = []
-    if resolution.get("architecture_kind") == "legacy_project":
-        resolved_project = str(resolution.get("resolved_project") or "").strip()
-        project_root = root / "projects" / f"com.example.{resolved_project}"
-        terms = list(dict.fromkeys(term.casefold() for term in intent_terms if len(term) >= 3))
-        ranked: list[tuple[int, Path, str, int]] = []
-        if resolved_project and project_root.is_dir() and terms:
-            for path in sorted(project_root.rglob("*")):
-                if not path.is_file() or path.suffix.casefold() not in _SOURCE_SUFFIXES:
-                    continue
-                try:
-                    source = path.read_text(encoding="utf-8", errors="replace")
-                except OSError:
-                    continue
-                folded_path = path.relative_to(root).as_posix().casefold()
-                folded_source = source.casefold()
-                path_hits = [term for term in terms if term in folded_path]
-                source_hits = [term for term in terms if term in folded_source]
-                distinct_hits = set(path_hits) | set(source_hits)
-                if len(distinct_hits) < 2:
-                    continue
-                first_offsets = [folded_source.find(term) for term in distinct_hits if term in folded_source]
-                first_offset = min((offset for offset in first_offsets if offset >= 0), default=0)
-                score = len(path_hits) * 120 + len(distinct_hits) * 45
-                ranked.append((score, path, source, first_offset))
-        ranked.sort(key=lambda item: (-item[0], item[1].as_posix()))
-        for rank, (score, path, source, offset) in enumerate(ranked[:6]):
-            start = max(0, offset - 600)
-            relative = path.relative_to(root).as_posix()
-            items.append(
-                {
-                    "filepath": relative,
-                    "start_line": source[:start].count("\n") + 1,
-                    "content": source[start : start + 1_800],
-                    "score": float(score),
-                    "intent_score": float(score),
-                    "matched_anchor": " ".join(terms[:8]),
-                    "retrieval_stage": "legacy_project_profile",
-                    "business_seed": rank == 0,
-                }
-            )
-        return items
-    modules = resolution.get("modules")
-    reachability = str(resolution.get("reachability") or "unresolved")
-    if not isinstance(modules, Sequence) or isinstance(modules, (str, bytes, bytearray)):
-        return items
-    for module_rank, module in enumerate(modules):
-        if not isinstance(module, Mapping):
-            continue
-        name = str(module.get("name") or "").strip()
-        intent_anchors = [str(value) for value in module.get("intent_anchors", []) if str(value).strip()]
-        try:
-            intent_score = float(module.get("intent_score") or 0.0)
-        except (TypeError, ValueError):
-            intent_score = 0.0
-        paths = module.get("implementation_paths")
-        if not name or not isinstance(paths, Sequence) or isinstance(paths, (str, bytes, bytearray)):
-            continue
-        for relative in paths:
-            path = root / str(relative)
-            try:
-                lines = path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
-            except OSError:
-                continue
-            search_terms = [*intent_anchors, name]
-            index = next((index for index, line in enumerate(lines) if any(term in line for term in search_terms)), 0)
-            start = max(0, index - 6)
-            snippet = "".join(lines[start : min(len(lines), index + 13)]).strip("\n")
-            if not snippet:
-                continue
-            items.append(
-                {
-                    "filepath": str(relative),
-                    "start_line": start + 1,
-                    "content": snippet,
-                    "score": float(140 - module_rank),
-                    "matched_anchor": next((term for term in search_terms if term in lines[index]), name),
-                    "retrieval_stage": "module_architecture",
-                    "business_seed": module_rank == 0 and intent_score > 0,
-                    "reachability": reachability,
-                }
-            )
-    return items
-
-
 def _implementation_layer(path: str) -> str:
     """Classify repository structure without inferring responsibility."""
     candidate = Path(path)
@@ -1891,6 +1559,8 @@ def _implementation_layer(path: str) -> str:
 def _code_path_adjustment(path: str) -> tuple[float, str]:
     candidate = Path(path)
     parts = {part.casefold() for part in candidate.parts}
+    if "rawfile" in parts and "bundle" in parts and candidate.name.casefold().startswith("bundle."):
+        return -0.12, "generated_bundle"
     is_localized_resource = (candidate.suffix.casefold() in _RESOURCE_SUFFIXES or (candidate.suffix.casefold() in {".js", ".ts"} and bool(parts & {"lang", "langs", "locales"}))) and (
         bool(parts & _RESOURCE_PATH_PARTS) or any(part.startswith("values") or part.endswith(".lproj") for part in parts) or candidate.name.casefold() == "localizable.strings"
     )
@@ -1916,8 +1586,8 @@ def _missing_implementation_layers(items: Sequence[Mapping[str, Any]], requested
 
 
 def _layer_balanced_candidates(candidates: Sequence[dict[str, Any]], requested: Sequence[str], *, limit: int) -> list[dict[str, Any]]:
-    """Keep the primary business entry, then represent plausible layers."""
-    ordered = sorted(candidates, key=lambda item: float(item.get("score") or -1.0), reverse=True)
+    """Select stronger evidence first and diversify layers only within a tier."""
+    ordered = sorted(candidates, key=_candidate_sort_key)
     selected: list[dict[str, Any]] = []
     seen: set[str] = set()
 
@@ -1927,34 +1597,40 @@ def _layer_balanced_candidates(candidates: Sequence[dict[str, Any]], requested: 
             seen.add(path)
             selected.append(item)
 
-    seed = next((item for item in ordered if item.get("business_seed") is True), None)
-    if seed is not None:
-        add(seed)
-
-    for layer in requested:
-        if any(item.get("implementation_layer") == layer for item in selected):
-            continue
-        match = next(
-            (item for item in ordered if item.get("implementation_layer") == layer and item.get("evidence_role") == "implementation"),
-            None,
-        ) or next((item for item in ordered if item.get("implementation_layer") == layer), None)
-        if match is not None:
-            add(match)
-    # When space permits, pair a layer's consumer with its localization resource.
-    for layer in requested:
-        present_roles = {item.get("evidence_role") for item in selected if item.get("implementation_layer") == layer}
-        complement = next(
-            (item for item in ordered if item.get("implementation_layer") == layer and item.get("evidence_role") in {"implementation", "resource"} and item.get("evidence_role") not in present_roles),
-            None,
-        )
-        if complement is not None:
-            add(complement)
-    for item in ordered:
-        add(item)
+    strengths = sorted({int(item.get("evidence_strength") or _retrieval_evidence_strength(item)) for item in ordered}, reverse=True)
+    for strength in strengths:
+        tier = [item for item in ordered if int(item.get("evidence_strength") or _retrieval_evidence_strength(item)) == strength]
+        for layer in requested:
+            if any(item.get("implementation_layer") == layer for item in selected):
+                continue
+            match = next(
+                (item for item in tier if item.get("implementation_layer") == layer and item.get("evidence_role") == "implementation"),
+                None,
+            ) or next((item for item in tier if item.get("implementation_layer") == layer), None)
+            if match is not None:
+                add(match)
+        # Pair consumers and resources only when doing so cannot cross an
+        # evidence boundary and displace a stronger candidate.
+        for layer in requested:
+            present_roles = {item.get("evidence_role") for item in selected if item.get("implementation_layer") == layer}
+            complement = next(
+                (item for item in tier if item.get("implementation_layer") == layer and item.get("evidence_role") in {"implementation", "resource"} and item.get("evidence_role") not in present_roles),
+                None,
+            )
+            if complement is not None:
+                add(complement)
+        for item in tier:
+            add(item)
+        if len(selected) >= limit:
+            break
     return selected
 
 
-def _fuse_candidate_pools(*, pools: Sequence[Sequence[dict[str, Any]]], limit: int) -> list[dict[str, Any]]:
+def _fuse_candidate_pools(
+    *,
+    pools: Sequence[Sequence[dict[str, Any]]],
+    limit: int,
+) -> list[dict[str, Any]]:
     """Fuse independent ranked views once, at file granularity.
 
     Provider scores are intentionally incomparable (Tabby RRF, repository grep
@@ -1971,25 +1647,62 @@ def _fuse_candidate_pools(*, pools: Sequence[Sequence[dict[str, Any]]], limit: i
                 continue
             seen_in_pool.add(path)
             contribution = 1.0 / (60.0 + rank + 1.0)
+            raw_stage = str(raw_item.get("retrieval_stage") or "unknown")
+            raw_strength = _retrieval_evidence_strength(raw_item)
             existing = fused.get(path)
             if existing is None:
                 item = dict(raw_item)
                 item["provider_score"] = raw_item.get("score")
-                item["retrieval_stages"] = [str(raw_item.get("retrieval_stage") or "unknown")]
+                item["retrieval_stages"] = [raw_stage]
+                item["evidence_strength"] = raw_strength
                 item["score"] = contribution
                 fused[path] = item
                 continue
-            existing["score"] = float(existing.get("score") or 0.0) + contribution
-            stage = str(raw_item.get("retrieval_stage") or "unknown")
-            if stage not in existing["retrieval_stages"]:
-                existing["retrieval_stages"].append(stage)
-            if raw_item.get("business_seed") is True:
-                existing["business_seed"] = True
-    ordered = sorted(fused.values(), key=lambda item: (-float(item.get("score") or 0.0), str(item.get("filepath") or "")))[:limit]
+            fused_score = float(existing.get("score") or 0.0) + contribution
+            stages = list(existing.get("retrieval_stages") or ())
+            current_strength = int(existing.get("evidence_strength") or 0)
+            if raw_strength > current_strength:
+                existing.update(raw_item)
+            if raw_stage not in stages:
+                stages.append(raw_stage)
+            existing["score"] = fused_score
+            existing["retrieval_stages"] = stages
+            existing["evidence_strength"] = max(current_strength, raw_strength)
+    # Apply the same evidence-first ordering before every bounded cut. Multiple
+    # weak views may improve order inside their tier, never overtake one exact
+    # literal fact merely by agreeing with each other.
+    ordered = sorted(fused.values(), key=_candidate_sort_key)[:limit]
     for rank, item in enumerate(ordered):
         item["fusion_score"] = item.get("score")
         item["score"] = max(0.0, 1.0 - rank * 0.02)
     return ordered
+
+
+def _retrieval_evidence_strength(item: Mapping[str, Any]) -> int:
+    """Return one stable evidence tier; numeric similarity never changes it."""
+    raw_stages = item.get("retrieval_stages")
+    stages = [str(value) for value in raw_stages] if isinstance(raw_stages, Sequence) and not isinstance(raw_stages, (str, bytes, bytearray)) else []
+    stages.append(str(item.get("retrieval_stage") or "unknown"))
+    strengths = {
+        "exact_ticket": 5,
+        "exact_identifier": 4,
+        "tabby_hybrid": 3,
+        "concept_expansion": 2,
+        "exact_supporting": 2,
+        "exact_anchor": 2,
+        "exact_code_duty": 1,
+        "tabby_code_duty": 1,
+    }
+    return max((strengths.get(stage, 2) for stage in stages), default=2)
+
+
+def _candidate_sort_key(item: Mapping[str, Any]) -> tuple[int, float, str]:
+    """One ordering key shared by fusion, semantic ranking and selection."""
+    return (
+        -int(item.get("evidence_strength") or _retrieval_evidence_strength(item)),
+        -float(item.get("score") or 0.0),
+        str(item.get("filepath") or item.get("path") or ""),
+    )
 
 
 def _allocate_anchor_queries(*, groups: Sequence[Sequence[str]], limit: int) -> list[str]:
@@ -2019,6 +1732,42 @@ def _allocate_anchor_queries(*, groups: Sequence[Sequence[str]], limit: int) -> 
         if not progressed:
             break
     return selected
+
+
+def _allocate_source_anchor_queries(
+    *,
+    ticket_anchors: Sequence[str],
+    duty_anchors: Sequence[str],
+    query_facts: Mapping[str, Any],
+    limit: int,
+) -> tuple[list[str], dict[str, str]]:
+    """Allocate the grep budget with the same evidence ordering as selection."""
+    candidates: dict[str, dict[str, Any]] = {}
+    order = 0
+
+    def add(values: Sequence[str], stage_for: Any) -> None:
+        nonlocal order
+        for raw in values:
+            value = str(raw).strip()
+            folded = value.casefold()
+            if not value:
+                continue
+            stage = stage_for(value) if callable(stage_for) else str(stage_for)
+            strength = _retrieval_evidence_strength({"retrieval_stage": stage})
+            existing = candidates.get(folded)
+            if existing is None:
+                candidates[folded] = {"value": value, "stage": stage, "strength": strength, "order": order}
+                order += 1
+            elif strength > int(existing["strength"]):
+                existing["stage"] = stage
+                existing["strength"] = strength
+
+    add(ticket_anchors, lambda value: _ticket_anchor_stage(value, query_facts))
+    add(duty_anchors, "exact_code_duty")
+    ordered = sorted(candidates.values(), key=lambda item: (-int(item["strength"]), int(item["order"])))[:limit]
+    anchors = [str(item["value"]) for item in ordered]
+    stages = {str(item["value"]).casefold(): str(item["stage"]) for item in ordered}
+    return anchors, stages
 
 
 def _cosine(left: Sequence[float], right: Sequence[float]) -> float:
@@ -2058,8 +1807,6 @@ def _semantic_rank(
     items: list[dict[str, Any]],
     config: Any,
     timeout: float,
-    product_scope_tokens: Sequence[str] = (),
-    requested_layers: Sequence[str] = (),
 ) -> tuple[list[dict[str, Any]], str]:
     endpoint = str(getattr(config, "embedding_base_url", "http://127.0.0.1:18082/v1")).rstrip("/") + "/embeddings"
     model = str(getattr(config, "embedding_model", "example-embedding-model"))
@@ -2074,45 +1821,20 @@ def _semantic_rank(
     try:
         vectors = _embed(endpoint=endpoint, model=model, texts=texts, headers=headers, timeout=timeout)
     except (httpx.HTTPError, ValueError):
-        for item in bounded:
-            adjustment, scope = _product_scope_adjustment(str(item.get("filepath") or ""), product_scope_tokens)
-            code_adjustment, candidate_kind = _code_path_adjustment(str(item.get("filepath") or ""))
-            item["product_scope"] = scope
-            item["candidate_kind"] = candidate_kind
-            item["implementation_layer"] = _implementation_layer(str(item.get("filepath") or ""))
-            item["score"] = float(item.get("score", 0)) + adjustment + code_adjustment
-        bounded.sort(key=lambda item: float(item.get("score", -1)), reverse=True)
         return bounded, "embedding_unavailable"
     query_vector = vectors[0]
-    module_intent_max = max(
-        (float(item.get("intent_score") or 0.0) for item in bounded if item.get("retrieval_stage") == "module_profile"),
-        default=0.0,
-    )
     for item, vector in zip(bounded, vectors[1:], strict=False):
         semantic_score = _cosine(query_vector, vector)
-        adjustment, scope = _product_scope_adjustment(str(item.get("filepath") or ""), product_scope_tokens)
-        code_adjustment, candidate_kind = _code_path_adjustment(str(item.get("filepath") or ""))
         item["semantic_score"] = semantic_score
-        item["product_scope"] = scope
-        item["candidate_kind"] = candidate_kind
-        item["implementation_layer"] = _implementation_layer(str(item.get("filepath") or ""))
         lexical_score = float(item.get("score") or 0.0)
         item["lexical_score"] = lexical_score
-        module_intent_score = float(item.get("intent_score") or 0.0)
-        intent_adjustment = min(0.20, module_intent_score / module_intent_max * 0.20) if item.get("retrieval_stage") == "module_profile" and module_intent_max > 0 and module_intent_score > 0 else 0.0
-        item["score"] = semantic_score + adjustment + code_adjustment + intent_adjustment
-    bounded.sort(key=lambda item: float(item.get("score", -1)), reverse=True)
-    best = float(bounded[0].get("score", 0)) if bounded else 0.0
-    floor = max(0.35, best - 0.12)
-    selected = [item for item in bounded if float(item.get("score", -1)) >= floor]
-    selected_paths = {str(item.get("filepath") or "") for item in selected}
-    for layer in requested_layers:
-        layer_best = next((item for item in bounded if item.get("implementation_layer") == layer), None)
-        if layer_best is not None and str(layer_best.get("filepath") or "") not in selected_paths:
-            selected.append(layer_best)
-            selected_paths.add(str(layer_best.get("filepath") or ""))
-    selected.sort(key=lambda item: float(item.get("score", -1)), reverse=True)
-    return selected, "ready"
+        # Lexical retrieval is the evidence-producing step. Embeddings may
+        # break close ties inside that bounded set, but must not replace the
+        # exact/concept rank or erase a literal match that embeds poorly
+        # against a long source snippet.
+        item["score"] = lexical_score + semantic_score * 0.04
+    bounded.sort(key=_candidate_sort_key)
+    return bounded, "ready"
 
 
 def _first(item: Mapping[str, Any], *keys: str) -> Any:
@@ -2207,12 +1929,13 @@ def _candidate_from_item(
             "source_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "current_source_verified": True,
             "retrieval_stage": str(item.get("retrieval_stage") or "exact_anchor"),
+            "retrieval_stages": [str(value) for value in item.get("retrieval_stages", []) if str(value).strip()],
+            "evidence_strength": int(item.get("evidence_strength") or _retrieval_evidence_strength(item)),
             "candidate_kind": str(item.get("candidate_kind") or "other"),
             "implementation_layer": str(item.get("implementation_layer") or _implementation_layer(relative)),
             "evidence_role": str(item.get("candidate_kind") or "other"),
             "product_scope": str(item.get("product_scope") or "unspecified"),
             "verified_edges": [],
-            "business_seed": item.get("business_seed") is True,
             "reachability": str(item.get("reachability") or "unresolved"),
         },
         "",
@@ -2233,32 +1956,75 @@ def build_source_retrieval(
     root = repository_root.expanduser().resolve()
     revision = _revision(root)
     enabled = bool(getattr(config, "enabled", False))
+    runtime_pre_scan = runtime_evidence.get("runtime_pre_scan")
+    device_identifiers = tuple(str(value).strip() for value in (runtime_pre_scan.get("ticket_device_identities", ()) if isinstance(runtime_pre_scan, Mapping) else ()) if str(value).strip())
+    source_bug_snapshot = _without_runtime_identities(bug_snapshot, device_identifiers)
+    source_query_facts = _without_runtime_identities(query_facts, device_identifiers)
     query = build_retrieval_query(
-        bug_snapshot=bug_snapshot,
-        query_facts=query_facts,
+        bug_snapshot=source_bug_snapshot,
+        query_facts=source_query_facts,
         runtime_evidence=runtime_evidence,
         max_chars=int(getattr(config, "max_query_chars", 1600)),
         retrieval_aliases=retrieval_aliases,
     )
     duty_query = build_code_duty_query(
-        bug_snapshot=bug_snapshot,
-        query_facts=query_facts,
+        bug_snapshot=source_bug_snapshot,
+        query_facts=source_query_facts,
         max_chars=min(640, int(getattr(config, "max_query_chars", 1600))),
     )
     architecture_resolution = resolve_module_architecture(
         repository_root=root,
         repository=repository,
-        bug_snapshot=bug_snapshot,
-        query_facts=query_facts,
+        bug_snapshot=source_bug_snapshot,
+        query_facts=source_query_facts,
         query=query,
         config=config,
     )
-    resource_navigation = _ticket_resource_navigation(root, bug_snapshot=bug_snapshot, query_facts=query_facts) if repository in {"sample_mobile_repo", "sample_platform_repo"} else []
-    query = _enrich_query_with_navigation(
-        query,
-        [*architecture_resolution.get("navigation_terms", []), *resource_navigation[:1]],
-        max_chars=int(getattr(config, "max_query_chars", 1600)),
-    )
+    unselected_only_paths = {str(path) for path in architecture_resolution.get("unselected_only_paths", []) if str(path).strip()}
+    architecture_kind = str(architecture_resolution.get("architecture_kind") or "")
+    declared_products = _recognized_declared_product_tokens(root, source_bug_snapshot)
+    enabled_module_paths = {str(path) for path in architecture_resolution.get("enabled_module_paths", []) if str(path).strip()}
+    resolved_project = str(architecture_resolution.get("resolved_project") or "").strip()
+    selected_project_prefix = f"projects/com.example.{resolved_project}/" if architecture_kind == "legacy_project" and resolved_project else ""
+    scope_rejections: list[dict[str, str]] = []
+
+    def product_scope_rejection_reason(path: str, *, include_project_overrides: bool) -> str:
+        if architecture_kind == "module_config" and path in unselected_only_paths:
+            return "unselected_product_implementation"
+        if not include_project_overrides or not path.startswith("projects/com.example."):
+            return ""
+        unselected_override = (
+            (architecture_kind == "module_config" and path not in enabled_module_paths)
+            or (architecture_kind == "legacy_project" and bool(selected_project_prefix) and not path.startswith(selected_project_prefix))
+            or _project_override_conflicts_with_declared_product(
+                root,
+                path=path,
+                declared_products=declared_products,
+            )
+        )
+        return "unselected_product_override" if unselected_override else ""
+
+    def retain_product_scope(
+        items: Sequence[dict[str, Any]],
+        *,
+        include_project_overrides: bool = False,
+        rejections: list[dict[str, str]] | None = None,
+    ) -> list[dict[str, Any]]:
+        rejection_sink = scope_rejections if rejections is None else rejections
+        retained: list[dict[str, Any]] = []
+        for item in items:
+            path = str(item.get("filepath") or "")
+            reason = product_scope_rejection_reason(
+                path,
+                include_project_overrides=include_project_overrides,
+            )
+            if reason:
+                if len(rejection_sink) < 12 and not any(entry["path"] == path for entry in rejection_sink):
+                    rejection_sink.append({"path": path[:300], "reason": reason})
+                continue
+            retained.append(item)
+        return retained
+
     base = {
         "schema_version": 4,
         "provider": "tabby",
@@ -2271,7 +2037,13 @@ def build_source_retrieval(
         "resource_coverage": [],
         "architecture_resolution": architecture_resolution,
         "rejections": [],
-        "metrics": {"query_chars": len(query), "duty_query_chars": len(duty_query), "raw_candidate_count": 0, "entry_count": 0},
+        "metrics": {
+            "query_chars": len(query),
+            "duty_query_chars": len(duty_query),
+            "source_excluded_device_identifier_count": len(device_identifiers),
+            "raw_candidate_count": 0,
+            "entry_count": 0,
+        },
     }
     if not enabled:
         return {**base, "status": "disabled", "reason": "source_retrieval_disabled"}
@@ -2303,22 +2075,21 @@ def build_source_retrieval(
     max_anchor_queries = int(getattr(config, "max_anchor_queries", 8))
     ticket_anchors = build_retrieval_anchors(
         query=query,
-        query_facts=query_facts,
+        query_facts=source_query_facts,
         max_anchors=max_anchor_queries,
         retrieval_aliases=retrieval_aliases,
     )
-    navigation_anchors = [str(value) for value in [*architecture_resolution.get("navigation_terms", []), *resource_navigation] if str(value).strip()]
-    duty_anchors = _code_duty_anchor_terms(bug_snapshot=bug_snapshot, query_facts=query_facts)
-    module_anchors = [str(item.get("name") or "") for item in architecture_resolution.get("modules", []) if isinstance(item, Mapping) and item.get("name")]
-    architecture_anchors = [str(value) for value in architecture_resolution.get("anchors", []) if str(value).strip()]
-    anchors = _allocate_anchor_queries(
-        groups=(ticket_anchors, navigation_anchors, duty_anchors, module_anchors, architecture_anchors),
+    duty_anchors = _code_duty_anchor_terms(bug_snapshot=source_bug_snapshot, query_facts=source_query_facts)
+    anchors, anchor_stages = _allocate_source_anchor_queries(
+        ticket_anchors=ticket_anchors,
+        duty_anchors=duty_anchors,
+        query_facts=source_query_facts,
         limit=max_anchor_queries,
     )
     fallback_concepts: list[str] = []
-    requested_layers = _requested_implementation_layers(query_facts)
+    requested_layers = _requested_implementation_layers(source_query_facts)
     product_scope_tokens = build_product_scope_tokens(
-        bug_snapshot,
+        source_bug_snapshot,
         retrieval_aliases=retrieval_aliases,
     )
     for candidate in architecture_resolution.get("project_candidates", []):
@@ -2327,6 +2098,8 @@ def build_source_retrieval(
         project = str(candidate.get("project") or "").strip().casefold()
         if project and project not in product_scope_tokens:
             product_scope_tokens.append(project)
+    max_raw_candidates = int(getattr(config, "max_raw_candidates", 24))
+    retrieval_candidate_limit = max_raw_candidates + min(len(unselected_only_paths), max_raw_candidates)
     try:
         repositories = _graphql(
             endpoint=endpoint,
@@ -2346,11 +2119,6 @@ def build_source_retrieval(
         )
         if not isinstance(selected, Mapping):
             return {**base, "status": "unavailable", "reason": "tabby_repository_not_registered"}
-        architecture_items = _architecture_items(
-            root,
-            architecture_resolution,
-            intent_terms=duty_anchors,
-        )
         hybrid_items: list[dict[str, Any]] = []
         duty_items: list[dict[str, Any]] = []
         hybrid_status = "unavailable"
@@ -2368,10 +2136,11 @@ def build_source_retrieval(
                     source_id=source_id,
                     query_text=query_text,
                     timeout=timeout,
-                    limit=int(getattr(config, "max_raw_candidates", 24)),
+                    limit=retrieval_candidate_limit,
                 )
                 for item in items:
                     item["retrieval_stage"] = stage
+                items = retain_product_scope(items)
                 return items, "ready" if items else "no_match"
             except (OSError, TimeoutError, ValueError, WebSocketException):
                 return [], "unavailable"
@@ -2402,9 +2171,14 @@ def build_source_retrieval(
               }
             }
         """
-        max_raw_candidates = int(getattr(config, "max_raw_candidates", 24))
 
-        def retrieve(terms: Sequence[str], *, stage: str, destination: list[dict[str, Any]]) -> None:
+        def retrieve(
+            terms: Sequence[str],
+            *,
+            stage: str,
+            destination: list[dict[str, Any]],
+            stages_by_term: Mapping[str, str] | None = None,
+        ) -> None:
             term_pools: list[list[dict[str, Any]]] = []
             for anchor_rank, anchor in enumerate(terms):
                 data = _graphql(
@@ -2420,10 +2194,11 @@ def build_source_retrieval(
                 )
                 grep = data.get("repositoryGrep")
                 if isinstance(grep, Mapping):
-                    anchor_items = _grep_items(grep.get("files"), anchor=anchor, anchor_rank=anchor_rank, retrieval_stage=stage)
+                    anchor_stage = (stages_by_term or {}).get(anchor.casefold(), stage)
+                    anchor_items = retain_product_scope(_grep_items(grep.get("files"), anchor=anchor, anchor_rank=anchor_rank, retrieval_stage=anchor_stage))
                     anchor_items.sort(
                         key=lambda item: (
-                            _product_scope_adjustment(str(item.get("filepath") or ""), product_scope_tokens)[0] + _code_path_adjustment(str(item.get("filepath") or ""))[0],
+                            _product_scope_adjustment(str(item.get("filepath") or ""), product_scope_tokens)[0],
                             str(item.get("filepath") or "").startswith("modules/"),
                         ),
                         reverse=True,
@@ -2441,15 +2216,20 @@ def build_source_retrieval(
                     # across independent anchors could affect their rank.
                     if term_items:
                         term_pools.append(term_items)
-            destination.extend(_fuse_candidate_pools(pools=term_pools, limit=max_raw_candidates))
+            destination.extend(
+                _fuse_candidate_pools(
+                    pools=term_pools,
+                    limit=max_raw_candidates,
+                )
+            )
 
-        retrieve(anchors, stage="exact_anchor", destination=exact_items)
-        pre_fallback_items = [*architecture_items, *hybrid_items, *duty_items, *exact_items]
+        retrieve(anchors, stage="exact_anchor", destination=exact_items, stages_by_term=anchor_stages)
+        pre_fallback_items = [*hybrid_items, *duty_items, *exact_items]
         missing_layers_before_fallback = _missing_implementation_layers(pre_fallback_items, requested_layers)
         if not hybrid_items or not duty_items or missing_layers_before_fallback:
             fallback_concepts = build_fallback_concepts(
-                bug_snapshot=bug_snapshot,
-                query_facts=query_facts,
+                bug_snapshot=source_bug_snapshot,
+                query_facts=source_query_facts,
                 runtime_evidence=runtime_evidence,
                 exact_anchors=anchors,
                 max_concepts=int(getattr(config, "max_fallback_concepts", 8)),
@@ -2465,54 +2245,31 @@ def build_source_retrieval(
             items=lexical_items,
             config=config,
             timeout=timeout,
-            product_scope_tokens=product_scope_tokens,
-            requested_layers=requested_layers,
         )
         raw_items = _fuse_candidate_pools(
-            pools=(architecture_items, hybrid_items, duty_items, lexical_items),
+            pools=(hybrid_items, duty_items, lexical_items),
             limit=max_raw_candidates,
         )
     except (httpx.HTTPError, ValueError) as exc:
         return {**base, "status": "unavailable", "reason": type(exc).__name__}
     raw_candidate_count = len(raw_items)
-    business_seed_paths = {str(item.get("filepath") or "") for item in architecture_items if item.get("business_seed") is True and str(item.get("filepath") or "")}
-    for item in raw_items:
-        if str(item.get("filepath") or "") in business_seed_paths:
-            item["business_seed"] = True
     for item in raw_items:
         adjustment, scope = _product_scope_adjustment(str(item.get("filepath") or ""), product_scope_tokens)
         code_adjustment, candidate_kind = _code_path_adjustment(str(item.get("filepath") or ""))
         item["product_scope"] = scope
         item["candidate_kind"] = candidate_kind
         item["implementation_layer"] = _implementation_layer(str(item.get("filepath") or ""))
+        item["evidence_strength"] = _retrieval_evidence_strength(item)
         item["score"] = float(item.get("score") or 0.0) + adjustment + code_adjustment
-    raw_items.sort(key=lambda item: float(item.get("score") or -1.0), reverse=True)
+    raw_items.sort(key=_candidate_sort_key)
     validated_candidates: list[dict[str, Any]] = []
-    rejections: list[dict[str, str]] = []
-    architecture_kind = str(architecture_resolution.get("architecture_kind") or "")
-    declared_products = _recognized_declared_product_tokens(root, bug_snapshot)
+    rejections: list[dict[str, str]] = list(scope_rejections)
     if architecture_kind in {"module_config", "legacy_project"} or declared_products:
-        enabled_module_paths = {str(path) for module in architecture_resolution.get("modules", []) if isinstance(module, Mapping) for path in module.get("implementation_paths", [])}
-        resolved_project = str(architecture_resolution.get("resolved_project") or "").strip()
-        selected_project_prefix = f"projects/com.example.{resolved_project}/" if architecture_kind == "legacy_project" and resolved_project else ""
-        retained_items: list[dict[str, Any]] = []
-        for item in raw_items:
-            path = str(item.get("filepath") or "")
-            unselected_override = path.startswith("projects/com.example.") and (
-                (architecture_kind == "module_config" and path not in enabled_module_paths)
-                or (architecture_kind == "legacy_project" and bool(selected_project_prefix) and not path.startswith(selected_project_prefix))
-                or _project_override_conflicts_with_declared_product(
-                    root,
-                    path=path,
-                    declared_products=declared_products,
-                )
-            )
-            if unselected_override:
-                if len(rejections) < 12:
-                    rejections.append({"path": path[:300], "reason": "unselected_product_override"})
-                continue
-            retained_items.append(item)
-        raw_items = retained_items
+        raw_items = retain_product_scope(
+            raw_items,
+            include_project_overrides=True,
+            rejections=rejections,
+        )
     seen: set[str] = set()
     max_candidates = int(getattr(config, "max_candidates", 5))
     max_snippet_chars = int(getattr(config, "max_snippet_chars", 1800))
@@ -2559,6 +2316,7 @@ def build_source_retrieval(
         "metrics": {
             "query_chars": len(query),
             "duty_query_chars": len(duty_query),
+            "source_excluded_device_identifier_count": len(device_identifiers),
             "raw_candidate_count": raw_candidate_count,
             "ranked_candidate_count": len(raw_items),
             "entry_count": len(entries),
@@ -2572,14 +2330,10 @@ def build_source_retrieval(
             "missing_layers_after_selection": _missing_implementation_layers(entries, requested_layers),
             "architecture_status": architecture_resolution.get("status"),
             "architecture_model": architecture_resolution.get("model"),
-            "business_seed_path": next((entry["path"] for entry in entries if entry.get("business_seed") is True), ""),
-            "architecture_module_count": len(architecture_resolution.get("modules") or []),
+            "architecture_module_count": int(architecture_resolution.get("configured_module_count") or 0),
             "product_scope_tokens": product_scope_tokens,
             "business_alias_count": len(tuple(retrieval_aliases)),
-            "resource_navigation": resource_navigation,
-            "retrieval_mode": (
-                "tabby_hybrid" if hybrid_items else "layered" if exact_items and concept_items else "concept_fallback" if concept_items else "module_architecture" if architecture_items else "exact_anchor" if exact_items else "none"
-            ),
+            "retrieval_mode": ("tabby_hybrid" if hybrid_items else "layered" if exact_items and concept_items else "concept_fallback" if concept_items else "exact_anchor" if exact_items else "none"),
             "tabby_hybrid_status": hybrid_status,
             "tabby_hybrid_candidate_count": len(hybrid_items),
             "tabby_code_duty_status": duty_status,

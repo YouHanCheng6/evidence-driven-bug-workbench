@@ -3,6 +3,7 @@
 import json
 import os
 from collections.abc import Mapping
+from typing import Literal
 
 import httpx
 
@@ -33,9 +34,13 @@ async def start_from_main_agent(runtime, bug_id: int) -> str:
         from app.channels.message_bus import InboundMessage
 
         msg = InboundMessage(
-            channel_name="feishu", chat_id=source["chat_id"], user_id=user_id,
-            owner_user_id=user_id, connection_id=source.get("connection_id"),
-            topic_id=source.get("topic_id"), thread_ts=source.get("thread_ts"),
+            channel_name="feishu",
+            chat_id=source["chat_id"],
+            user_id=user_id,
+            owner_user_id=user_id,
+            connection_id=source.get("connection_id"),
+            topic_id=source.get("topic_id"),
+            thread_ts=source.get("thread_ts"),
             text=str(bug_id),
         )
         # Reuse original dispatch, active-task handling and completion watcher.
@@ -50,7 +55,7 @@ async def start_from_main_agent(runtime, bug_id: int) -> str:
     headers.update({CSRF_HEADER_NAME: token, "Cookie": f"{CSRF_COOKIE_NAME}={token}", "X-DeerFlow-Bug-Action-Source": "main_agent"})
     gateway_url = service.manager._gateway_url if service is not None else os.environ.get("DEER_FLOW_GATEWAY_URL", "http://127.0.0.1:8001")
     async with httpx.AsyncClient(timeout=20.0) as client:
-        response = await client.post(f"{gateway_url.rstrip('/')}/api/bug-workflows", headers=headers, json={"bug_id": bug_id, "auto_repair": False})
+        response = await client.post(f"{gateway_url.rstrip('/')}/api/bug-workflows", headers=headers, json={"bug_id": bug_id})
     response.raise_for_status()
     payload = response.json()
     return json.dumps(
@@ -63,3 +68,25 @@ async def start_from_main_agent(runtime, bug_id: int) -> str:
         },
         ensure_ascii=False,
     )
+
+
+async def change_code_from_main_agent(runtime, bug_id: int, action: Literal["rollback", "restore"]) -> str:
+    """Use the same owner-scoped API as Workbench buttons and Feishu commands."""
+    context = runtime.context if isinstance(runtime.context, Mapping) else {}
+    owner = resolve_runtime_user_id(runtime)
+    shared_owner = context.get(BUG_WORKBENCH_OWNER_USER_ID_CONTEXT_KEY)
+    if context.get("is_internal") is True and isinstance(shared_owner, str) and shared_owner:
+        owner = shared_owner
+    from app.channels.service import get_channel_service
+
+    service = get_channel_service()
+    gateway = service.manager._gateway_url if service else os.environ.get("DEER_FLOW_GATEWAY_URL", "http://127.0.0.1:8001")
+    token = generate_csrf_token()
+    headers = create_internal_auth_headers(owner_user_id=owner)
+    headers.update({CSRF_HEADER_NAME: token, "Cookie": f"{CSRF_COOKIE_NAME}={token}", "X-DeerFlow-Bug-Action-Source": "main_agent"})
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(f"{gateway.rstrip('/')}/api/bug-workflows/by-bug/{bug_id}/{action}", headers=headers)
+    payload = response.json()
+    if response.is_error:
+        return f"Bug #{bug_id}：{payload.get('detail', '操作未完成')}"
+    return str(payload["completion_report"])

@@ -13,11 +13,17 @@ Runtime compatibility is not established. Validate offline changes with
 `python3.12 -m unittest discover -s tests/public_release -v`; these do not substitute
 for end-to-end workflow tests. See `docs/personal/REDACTION_AND_LIMITATIONS.md`.
 
-The 2026-10-13 snapshot adds evidence-role investigation, ranked retrieval
-fusion, streaming private log indexes, ephemeral visual extraction and an
-optional `examplewiki` interface. Its eight `example_*` read tools are fictional
-adapter names; deployers must implement their own authorized mapping. Never
-include the actual connection JSON or remote knowledge content in this repo.
+The 2026-10-22 snapshot preserves evidence-role investigation and source-provenance
+retrieval ranking. A separate read-only log expert selects original source/line
+references; the backend restores complete redacted records for investigation.
+Optional section-four execution begins only after verified note writeback, tracks
+every local requirement and reports actual files and partial/incomplete outcomes.
+It is disabled in the public example configuration. Snapshot rollback/restore
+does not invoke a model or restart analysis. Visual extraction remains ephemeral,
+tool-free and Codex-only in this edition. The optional `examplewiki` interface's
+eight `example_*` read tools are fictional adapter names; deployers must implement
+their own authorized mapping. Never include actual connection JSON, knowledge
+content, runtime log indexes or source-change snapshots in this repo.
 
 This file provides guidance to AI coding agents (Claude Code, Codex, and others) when working with code in this repository. It is the source of truth; the sibling `CLAUDE.md` imports it via `@AGENTS.md`.
 

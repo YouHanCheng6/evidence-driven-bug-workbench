@@ -9,9 +9,38 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 _EMPTY_TICKET_FIELD_PATTERN = re.compile(
-    r"[\[【]?\s*(?:手机型号与系统|测试设备\s*sn|测试时间|预置条件|测试步骤|复现概率|重现概率|实测结果|实际结果|预期结果|恢复方法|问题恢复方法)\s*[\]】]?\s*[:：]?",
+    r"[\[【]?\s*(?:手机型号与系统|测试设备\s*sn|测试时间|前置条件|预置条件|步骤|测试步骤|操作步骤|复现步骤|复现概率|重现概率|实测结果|实际结果|测试结果|期望结果|预期结果|恢复方法|问题恢复|问题恢复方法)\s*[\]】]?\s*[:：]?",
     re.IGNORECASE,
 )
+_TICKET_SECTION_PATTERN = re.compile(
+    r"[\[【]\s*(?P<label>手机型号与系统|测试设备\s*sn|测试时间|前置条件|预置条件|步骤|测试步骤|操作步骤|复现步骤|复现概率|重现概率|实测结果|实际结果|测试结果|期望结果|预期结果|恢复方法|问题恢复|问题恢复方法)\s*[\]】]\s*[:：]?",
+    re.IGNORECASE,
+)
+_NUMBERED_STEP_PATTERN = re.compile(
+    r"(?:^|\s)(?:步骤\s*)?(?P<number>\d{1,2})[、.．)）]\s*(?P<text>.*?)(?=(?:\s+(?:步骤\s*)?\d{1,2}[、.．)）])|$)",
+    re.IGNORECASE | re.DOTALL,
+)
+_SECTION_KIND_BY_LABEL = {
+    "手机型号与系统": "test_context",
+    "测试设备sn": "test_context",
+    "测试时间": "test_context",
+    "前置条件": "preconditions",
+    "预置条件": "preconditions",
+    "步骤": "steps",
+    "测试步骤": "steps",
+    "操作步骤": "steps",
+    "复现步骤": "steps",
+    "复现概率": "reproduction_probability",
+    "重现概率": "reproduction_probability",
+    "实测结果": "actual",
+    "实际结果": "actual",
+    "测试结果": "actual",
+    "期望结果": "expected",
+    "预期结果": "expected",
+    "恢复方法": "recovery",
+    "问题恢复": "recovery",
+    "问题恢复方法": "recovery",
+}
 _CLIENTS = frozenset({"android", "ios", "harmony"})
 _RNSDK_CONTAINER_ROOT = "/mnt/repos/sample_mobile_repo"
 _HARMONY_CONTAINER_ROOT = "/mnt/repos/sample_platform_repo"
@@ -250,26 +279,67 @@ def _meaningful_ticket_text(value: Any) -> str:
     return text if remainder else ""
 
 
-def _clean_investigation_focus(raw_focus: Mapping[str, Any] | None) -> dict[str, Any]:
-    if not isinstance(raw_focus, Mapping):
-        return {}
-    textual_lists = {"acceptance_details", "evidence_focuses", "open_edges"}
-    cleaned: dict[str, Any] = {}
-    for key, value in raw_focus.items():
-        if isinstance(value, list) and key in textual_lists:
-            retained = [text for item in value if (text := _meaningful_ticket_text(item))]
-            if retained:
-                cleaned[key] = retained
-        elif isinstance(value, list):
-            if value:
-                cleaned[key] = value
-        elif isinstance(value, str):
-            retained = _meaningful_ticket_text(value)
-            if retained:
-                cleaned[key] = retained
-        elif value not in (None, "", []):
-            cleaned[key] = value
-    return cleaned
+def _normalized_section_label(value: str) -> str:
+    return re.sub(r"\s+", "", value).casefold()
+
+
+def _split_numbered_steps(value: str) -> list[str]:
+    matches = list(_NUMBERED_STEP_PATTERN.finditer(value))
+    if not matches:
+        text = value.strip(" \t\r\n，。；;：:")
+        return [text] if text else []
+    steps = [match.group("text").strip(" \t\r\n，。；;：:") for match in matches]
+    return [step for step in steps if step]
+
+
+def _parse_ticket_sections(snapshot: Mapping[str, Any]) -> dict[str, list[str]]:
+    """Parse ZenTao's flattened Bug body once without inventing field roles.
+
+    ZenTao exposes the authored template as one ``description`` string.  A
+    labelled block is authoritative for its own role; an unlabelled dedicated
+    ``steps``/``actual``/``expected`` field keeps that field's role.  Free-form
+    description text stays unclassified instead of being copied into several
+    incompatible facts.
+    """
+    collected: dict[str, list[str]] = {
+        "test_context": [],
+        "preconditions": [],
+        "steps": [],
+        "actual": [],
+        "expected": [],
+        "reproduction_probability": [],
+        "recovery": [],
+        "unclassified": [],
+    }
+
+    def add(kind: str, value: Any) -> None:
+        text = _meaningful_ticket_text(value).strip(" \t\r\n，。；;：:")
+        if not text:
+            return
+        values = _split_numbered_steps(text) if kind == "steps" else [text]
+        for item in values:
+            if item and item not in collected[kind]:
+                collected[kind].append(item)
+
+    for field_name, unlabelled_kind in (("description", "unclassified"), ("steps", "steps"), ("actual", "actual"), ("expected", "expected")):
+        text = _meaningful_ticket_text(snapshot.get(field_name))
+        if not text:
+            continue
+        matches = list(_TICKET_SECTION_PATTERN.finditer(text))
+        if not matches:
+            add(unlabelled_kind, text)
+            continue
+        preamble = text[: matches[0].start()].strip(" \t\r\n，。；;：:")
+        if preamble:
+            add("unclassified", preamble)
+        for index, match in enumerate(matches):
+            label = _normalized_section_label(match.group("label"))
+            kind = _SECTION_KIND_BY_LABEL.get(label)
+            if kind is None:
+                continue
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+            add(kind, text[match.end() : end])
+    return collected
 
 
 _TICKET_ACTION_VERBS = (
@@ -334,12 +404,7 @@ def _knowledge_query_facts(
     confirmed_product_scope: str | None = None,
 ) -> dict[str, Any]:
     items = _visual_items(attachment_evidence)
-    preliminary_triage = bug_snapshot.get("preliminary_triage")
-    raw_focus = preliminary_triage.get("investigation_focus") if isinstance(preliminary_triage, Mapping) else None
-    investigation_focus = _clean_investigation_focus(raw_focus if isinstance(raw_focus, Mapping) else None)
-    acceptance_details = tuple(investigation_focus.get("acceptance_details", ())) if isinstance(investigation_focus.get("acceptance_details"), list) else ()
-    focus_evidence = tuple(investigation_focus.get("evidence_focuses", ())) if isinstance(investigation_focus.get("evidence_focuses"), list) else ()
-    focus_edges = tuple(investigation_focus.get("open_edges", ())) if isinstance(investigation_focus.get("open_edges"), list) else ()
+    ticket_sections = _parse_ticket_sections(bug_snapshot)
     reported = _normalized_clients(reported_clients)
     visual_clients: list[Any] = []
     for item in items:
@@ -352,15 +417,13 @@ def _knowledge_query_facts(
     # set after the dedicated device/system judgment has completed.
     observed = ["harmony"] if "harmony" in reported else (_normalized_clients(observed_clients) or _normalized_clients(visual_clients))
     identifier_sources = (
-        *(bug_snapshot.get(key) for key in ("title", "description", "steps", "actual", "expected")),
-        investigation_focus.get("observed_behavior"),
-        investigation_focus.get("expected_behavior"),
-        *acceptance_details,
-        *focus_evidence,
+        bug_snapshot.get("title"),
+        *(value for key in ("steps", "actual", "expected", "unclassified") for value in ticket_sections[key]),
         *(value for item in items for value in item.values() if isinstance(value, (str, int))),
     )
     derived_event_ids, derived_resource_keys = _structured_identifiers(identifier_sources)
-    ticket_navigation = _ticket_navigation_facts(identifier_sources)
+    step_navigation = _ticket_navigation_facts(ticket_sections["steps"])
+    page_navigation = _ticket_navigation_facts((bug_snapshot.get("title"), *ticket_sections["steps"], *ticket_sections["actual"], *ticket_sections["expected"]))
 
     facts: dict[str, Any] = {
         "reported_clients": reported,
@@ -368,28 +431,32 @@ def _knowledge_query_facts(
         "investigation_mode": investigation_mode,
         "client_scope_status": client_scope_status,
         "candidate_implementation_layers": _unique_texts(candidate_implementation_layers, limit=5, item_limit=40),
-        "investigation_focus": investigation_focus,
         "product_variants": _unique_texts((bug_snapshot.get("product"), *(item.get("product_variant") or item.get("product") for item in items))),
-        "user_paths": _unique_texts((*ticket_navigation["paths"], *(item.get("user_path") for item in items))),
-        "entry_actions": _unique_texts((*ticket_navigation["actions"], *(item.get("entry_action") for item in items))),
-        "pages_or_regions": _unique_texts((*ticket_navigation["pages"], *(item.get("page") or item.get("page_or_region") for item in items))),
+        "test_context": _unique_texts(ticket_sections["test_context"]),
+        "preconditions": _unique_texts(ticket_sections["preconditions"]),
+        "reproduction_probability": _unique_texts(ticket_sections["reproduction_probability"]),
+        "recovery": _unique_texts(ticket_sections["recovery"]),
+        "user_paths": _unique_texts((*step_navigation["paths"], *(item.get("user_path") for item in items))),
+        "entry_actions": _unique_texts((*ticket_sections["steps"], *step_navigation["actions"], *(item.get("entry_action") for item in items))),
+        "pages_or_regions": _unique_texts((*page_navigation["pages"], *(item.get("page") or item.get("page_or_region") for item in items))),
         "visual_states": _unique_texts(tuple(item.get("page_state") or item.get("visual_state") for item in items)),
         "visible_controls": _unique_texts(tuple(item.get("region_or_control") or item.get("visible_control") for item in items)),
-        "event_or_actions": _unique_texts((*ticket_navigation["actions"], *(item.get("event_or_action") or item.get("event_type") or item.get("action") for item in items))),
+        # Ticket operations already belong to ``entry_actions``.  This field
+        # is reserved for an event/action explicitly observed in an
+        # attachment so the same prose cannot enter retrieval under two roles.
+        "event_or_actions": _unique_texts(tuple(item.get("event_or_action") or item.get("event_type") or item.get("action") for item in items)),
         "event_ids": _unique_texts((*derived_event_ids, *(item.get("event_id") for item in items))),
         "resource_keys": _unique_texts((*derived_resource_keys, *(item.get("resource_key") or item.get("text_key") or item.get("copy_key") for item in items))),
-        "actual_texts": _unique_texts((_meaningful_ticket_text(bug_snapshot.get("actual")), investigation_focus.get("observed_behavior"), *(item.get("actual_text") or item.get("actual") for item in items))),
+        "actual_texts": _unique_texts((*ticket_sections["actual"], *(item.get("actual_text") or item.get("actual") for item in items))),
         "expected_texts": _unique_texts(
             (
                 *_confirmed_copy_targets(confirmed_product_scope),
-                _meaningful_ticket_text(bug_snapshot.get("expected")),
-                investigation_focus.get("expected_behavior"),
-                *acceptance_details,
+                *ticket_sections["expected"],
                 *(item.get("expected_text") or item.get("expected") for item in items),
             )
         ),
         "ticket_texts": _unique_texts(
-            (*tuple(_meaningful_ticket_text(bug_snapshot.get(key)) for key in ("title", "description", "steps")), *acceptance_details, *focus_evidence, *focus_edges),
+            (_meaningful_ticket_text(bug_snapshot.get("title")), *ticket_sections["unclassified"]),
             limit=20,
             item_limit=2_000,
         ),

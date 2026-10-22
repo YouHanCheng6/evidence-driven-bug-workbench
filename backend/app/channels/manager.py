@@ -87,6 +87,16 @@ BOUND_IDENTITY_UNAVAILABLE_MESSAGE = "Channel connection verification is tempora
 _ZENTAO_BUG_URL_PATTERN = re.compile(r"(?:https?://[^\s]+)?/zentao/bug-view-(\d+)\.html", re.IGNORECASE)
 _EXPLICIT_BUG_ID_PATTERN = re.compile(r"(?:禅道\s*)?(?:bug|缺陷)\s*#?\s*(\d{1,10})\b", re.IGNORECASE)
 _STANDALONE_BUG_ID_PATTERN = re.compile(r"^\s*#?\s*(\d{4,10})\s*$")
+_BUG_CODE_ACTION_PATTERN = re.compile(
+    r"^(?:请帮我|帮我|请)?\s*(回退|撤销|恢复)\s*(?:禅道\s*)?(?:bug|缺陷)?\s*#?\s*(\d{1,10})"
+    r"(?:\s*的?\s*(?:本次)?\s*(?:代码)?(?:修改|改动))?\s*[。！!]*$",
+    re.IGNORECASE,
+)
+_BUG_CODE_ACTION_SUFFIX_PATTERN = re.compile(
+    r"^(?:请帮我|帮我|请)?\s*(?:把|将)?\s*(?:禅道\s*)?(?:bug|缺陷)?\s*#?\s*(\d{1,10})"
+    r"\s*(?:的?\s*(?:本次)?\s*(?:代码)?(?:修改|改动))?\s*(回退|撤销|恢复)\s*[。！!]*$",
+    re.IGNORECASE,
+)
 _BUG_FOLLOWUP_PATTERN = re.compile(
     r"^\s*(?:继续(?:分析|查|处理)?(?:这个(?:\s*(?:bug|缺陷))?)?|分析这个(?:\s*(?:bug|缺陷))?|查这个(?:\s*(?:bug|缺陷))?)\s*[。！？!?]*\s*$",
     re.IGNORECASE,
@@ -331,6 +341,16 @@ def _is_bug_workflow_followup(text: str) -> bool:
     return bool(_BUG_FOLLOWUP_PATTERN.fullmatch(text))
 
 
+def _parse_bug_code_action(text: str) -> tuple[str, int] | None:
+    match = _BUG_CODE_ACTION_PATTERN.fullmatch(text.strip())
+    if match is not None:
+        return ("restore" if match.group(1) == "恢复" else "rollback", int(match.group(2)))
+    match = _BUG_CODE_ACTION_SUFFIX_PATTERN.fullmatch(text.strip())
+    if match is not None:
+        return ("restore" if match.group(2) == "恢复" else "rollback", int(match.group(1)))
+    return None
+
+
 def _format_bug_attachment_evidence_notice(bug_id: int, evidence: Any) -> str | None:
     """Render one completion notice only after every attachment reaches a final state."""
     if not isinstance(evidence, dict) or not isinstance(evidence.get("assets"), list):
@@ -519,14 +539,17 @@ def _format_feishu_repair_terminal_result(
     workbench_base_url: str = DEFAULT_BUG_WORKBENCH_URL,
 ) -> str:
     """Report only the repair outcome after Feishu already received the analysis."""
+    item_report = str(state.get("repair_report") or "").strip() if state.get("repair_outcome") else ""
     report = re.sub(r"\s+", " ", str(state.get("repair_report") or state.get("completion_report") or "")).strip()
     changed = state.get("changed_files")
     changed_files = [str(item) for item in changed if item] if isinstance(changed, list) else []
-    if changed_files:
-        lines = [f"禅道 Bug #{bug_id}：自动修复已形成代码差异，等待验收。", f"修改文件：{'、'.join(changed_files[:8])}"]
+    if item_report:
+        lines = [f"禅道 Bug #{bug_id}", item_report]
+    elif changed_files:
+        lines = [f"禅道 Bug #{bug_id}：按备注修改已完成，共修改 {len(changed_files)} 个文件。", *changed_files]
     else:
-        lines = [f"禅道 Bug #{bug_id}：自动修复已结束，未修改代码。"]
-    if report:
+        lines = [f"禅道 Bug #{bug_id}：本次修改 0 个文件。"]
+    if report and not item_report:
         lines.append(f"修复专家结论：{report[:1000]}")
     if state.get("note_verified") is True:
         note_status = "已有确认备注，本次未重复写入" if state.get("note_write_skipped") is True else "已写入并回读确认"
@@ -578,7 +601,10 @@ def _format_feishu_failed_bug_result(
         lines.append(f"分析定位：{nearest_failure[:600]}")
     repair_report = re.sub(r"\s+", " ", str(state.get("repair_report") or "")).strip()
     if repair_report:
-        lines.append(f"修复专家结论：{repair_report[:1000]}")
+        lines.append(str(state["repair_report"]) if state.get("repair_outcome") else f"修复专家结论：{repair_report[:1000]}")
+    changed_files = state.get("changed_files")
+    if isinstance(changed_files, list):
+        lines.extend([f"实际保留修改：{len(changed_files)} 个文件", *[str(item) for item in changed_files]])
     lines.append(f"失败原因：{error[:700]}")
     if state.get("note_verified") is True:
         note_status = "已有确认备注，本次未重复写入" if state.get("note_write_skipped") is True else "已写入并回读确认"
@@ -1114,7 +1140,7 @@ def _format_bug_workbench_summary_snapshot(state: Mapping[str, Any]) -> str:
         ("repair_decision", "代码执行状态（report_only仅表示未执行，不代表不能本地修改）", 80),
         ("decision_reason", "分析阶段判断原因", 500),
         ("note_content", "禅道备注", 4000),
-        ("repair_report", "历史修复结果", 800),
+        ("repair_report", "按备注修改结果", 800),
         ("completion_report", "完成说明", 500),
         ("error", "错误", 300),
     )
@@ -1124,7 +1150,7 @@ def _format_bug_workbench_summary_snapshot(state: Mapping[str, Any]) -> str:
             lines.append(f"{label}：{value.strip()[:limit]}")
     changed_files = state.get("changed_files")
     if isinstance(changed_files, list) and changed_files:
-        lines.append("修改文件：" + "、".join(str(item) for item in changed_files[:8]))
+        lines.append(f"实际修改 {len(changed_files)} 个文件：" + "、".join(str(item) for item in changed_files))
     last_event = state.get("last_event")
     if isinstance(last_event, Mapping):
         lines.append(f"最近操作：revision {last_event.get('revision', '?')} / {last_event.get('actor_source', '未知来源')} / {last_event.get('event_type', 'state_updated')} / {last_event.get('summary') or '无摘要'}")
@@ -2230,7 +2256,8 @@ class ChannelManager:
                     explicit_bug = _extract_zentao_bug_id(shortcut_text)
                     natural_bug_request = explicit_bug is not None and not shortcut_text.isdecimal()
                     batch_request = _is_main_agent_bug_batch_request(shortcut_text)
-                    if not natural_bug_request and not batch_request and await self._try_dispatch_feishu_bug_workflow(msg):
+                    code_action = _parse_bug_code_action(shortcut_text)
+                    if (code_action is not None or (not natural_bug_request and not batch_request)) and await self._try_dispatch_feishu_bug_workflow(msg):
                         return
                     await self._handle_chat(msg, bound_identity_checked=True)
         except InvalidChannelSessionConfigError as exc:
@@ -2307,7 +2334,8 @@ class ChannelManager:
         summaries = {
             "repair_started": "Bug 工作台已自动开始修复，Bug Workbench 正在执行。",
             "repair_accepted": "已在工作台确认验收，本次修复已完成。",
-            "repair_rolled_back": "已在工作台选择回退，本次自动修改已恢复。",
+            "repair_rolled_back": "已在工作台回退本次代码修改。",
+            "repair_restored": "已在工作台恢复本次代码修改。",
             "workflow_cancelled": "已在工作台取消当前任务。",
         }
         action_text = summaries.get(event_type)
@@ -2323,7 +2351,8 @@ class ChannelManager:
             owner_user_id=str(workflow.get("channel_owner_user_id") or self._bug_workbench_owner_user_id or "") or None,
             text="",
         )
-        await self._publish_bug_workflow_message(message, f"禅道 Bug #{bug_id}：{action_text}")
+        text = str(workflow.get("completion_report") or "") if event_type in {"repair_rolled_back", "repair_restored"} else ""
+        await self._publish_bug_workflow_message(message, text or f"禅道 Bug #{bug_id}：{action_text}")
         key = (channel_name, connection_id, chat_id, topic_id)
         conversation = self._bug_workflow_conversations.get(key)
         if conversation is None:
@@ -2352,7 +2381,6 @@ class ChannelManager:
                 f"{self._gateway_url}/api/bug-workflows",
                 json={
                     "bug_id": bug_id,
-                    "auto_repair": False,
                     "channel_key": self._serialize_bug_workflow_conversation_key(conversation_key),
                 },
                 headers=headers,
@@ -2585,7 +2613,7 @@ class ChannelManager:
                 if status not in _BUG_WORKFLOW_TERMINAL_STATUSES:
                     continue
                 if status == "note_written":
-                    repair_attempted = state.get("repair_attempted") is True or bool(state.get("repair_engine"))
+                    repair_attempted = state.get("auto_repair_enabled") is True or state.get("repair_attempted") is True or bool(state.get("repair_engine"))
                     if repair_attempted and workflow.repair_notice_sent:
                         message = _format_feishu_repair_terminal_result(
                             workflow.bug_id,
@@ -2696,6 +2724,32 @@ class ChannelManager:
         if msg.channel_name == "feishu":
             text = _strip_leading_feishu_mention(text)
         if not text and not msg.files:
+            return False
+        code_action = _parse_bug_code_action(text)
+        if code_action is not None:
+            action, identifier = code_action
+            try:
+                headers = self._bug_workflow_headers(msg)
+                headers["X-DeerFlow-Bug-Action-Source"] = "feishu"
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    response = await client.post(f"{self._gateway_url}/api/bug-workflows/by-bug/{identifier}/{action}", headers=headers)
+                if response.is_error:
+                    detail = response.json().get("detail", "代码操作未完成")
+                    await self._publish_bug_workflow_message(msg, f"Bug #{identifier}：{detail}")
+                    return True
+                payload = response.json()
+                key = self._bug_workflow_conversation_key(msg)
+                existing = self._bug_workflow_conversations.get(key)
+                if existing is not None and existing.workflow_id == payload.get("id"):
+                    existing.status = str(payload["status"])
+                await self._publish_bug_workflow_message(msg, str(payload["completion_report"]))
+            except (httpx.HTTPError, ValueError, KeyError):
+                logger.exception("[Manager] Bug code change action failed: bug=%s action=%s", identifier, action)
+                await self._publish_bug_workflow_message(msg, f"Bug #{identifier}：暂时无法确认代码操作结果。可重复发送同一命令读取或完成本次操作。")
+            return True
+        if re.search(r"回退|撤销|恢复", text) and _extract_zentao_bug_id(text) is not None:
+            # Other phrasing belongs to the main assistant's explicit action
+            # tool, never the numeric shortcut that starts another analysis.
             return False
         conversation_key = self._bug_workflow_conversation_key(msg)
         existing = self._bug_workflow_conversations.get(conversation_key)
@@ -2887,7 +2941,7 @@ class ChannelManager:
             (
                 f"Bug Workbench 已开始处理禅道 Bug #{bug_id}：正在读取禅道正文，并在存在图片或附件时按类型下载和提取事实。"
                 "事实整理后会先说明初步问题方向；文案问题将在源码调查前确认修改目标和排除项，其他问题直接进入源码调查。"
-                "最终将呈现四部分分析结论和修改／处理意见，写入并回读确认禅道备注后完成；不会自动修改代码。"
+                "最终将呈现四部分分析结论和修改／处理意见；禅道备注回读确认后，按配置自动执行本次明确的本地修改，并反馈实际修改文件数和文件名。"
             ),
         )
         return True

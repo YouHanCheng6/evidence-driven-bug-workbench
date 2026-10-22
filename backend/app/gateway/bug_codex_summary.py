@@ -180,106 +180,56 @@ async def investigate_bug_with_codex(
     ticket = json.dumps(dict(bug_snapshot), ensure_ascii=False, default=str)
     context = json.dumps(dict(prepared_context), ensure_ascii=False, default=str)
     evidence_rule = (
-        "证据：工单与附件是现象事实；"
-        "Tabby、业务规则、架构及未关联的日志只是导航，已关联同事务日志是运行事实。"
-        "本地修改结论只采纳当前检出源码中已读取、且接入当前产品真实入口的证据；"
-        "嵌入式 WIKI 源码可证明设备侧实现的可达机制与责任边界，须注明项目、芯片、路径与行号，不能代替实际设备固件版本或同事务日志。"
-        "源码能证明可达机制，不能单独证明本次故障走了该分支；"
-        "多个来源共用错误回调时，没有同事务错误码不得排除其中一端。"
-        "事实与主因果链优先于候选覆盖率。"
-        if embedded_wiki
-        else "证据：工单与附件是现象事实；"
-        "Tabby、业务规则、架构和日志只是导航。"
-        "结论只采纳当前检出源码中已读取、且接入当前产品真实入口的证据。"
-        "源码能证明可达机制，不能单独证明本次故障走了该分支；"
-        "多个来源共用错误回调时，没有同事务错误码不得排除其中一端。"
-        "事实与主因果链优先于候选覆盖率。"
+        "证据：工单与附件是现象事实；Tabby、业务规则和架构只是导航；前置材料 runtime_observations 中已交接的原始日志是本单运行观察，能证明其记录的事件、状态和值，"
+        "但不能单独证明根因；没有交接日志不证明日志中不存在相关记录。本地修改结论只采纳当前检出源码中已读取、且接入当前产品真实入口的证据。源码能证明可达机制，"
+        "不能单独证明本次故障走了该分支；多个来源共用错误回调时，没有同事务错误码不得排除其中一端。事实与主因果链优先于候选覆盖率。"
+        + ("嵌入式 WIKI 源码可证明设备侧实现的可达机制与责任边界，须注明项目、芯片、路径与行号，不能代替实际设备固件版本或同事务日志。" if embedded_wiki else "")
     )
     embedded_rule = (
-        "嵌入式 WIKI：先用已交接的工单、本地源码和同事务日志判断嵌入式是否是故障目标；"
-        "摘要缺关键行时先按实际字段查询现有日志索引。"
+        "嵌入式 WIKI：先用已交接的工单、本地源码和同事务日志判断嵌入式是否是故障目标；没有已交接的同事务日志时，不假定日志缺失或已检索。"
         "只有现有证据已经形成嵌入式故障假设——设备自身响应或状态可能异常、设备协议/固件逻辑可能直接形成现象，或观测行为与应有设备契约冲突——才调用 `examplewiki`。"
-        "仅出现设备数据、设备错误码、固件版本未知、两端记录不一致，或需要清理/追溯设备内数据，都不能单独触发 MCP。"
-        "调用前写明故障假设、指向它的现有证据、待改变的责任决策和足以确认或排除它的结果；"
-        "项目不明时才用 `example_list_projects`。"
-        "先用最特异的事件、命令或错误码核对设备契约及同事务表现：若表现符合契约，立即判定嵌入式已排除并停止 MCP；"
-        "若仍冲突，才沿同一共享标识读取产生条件、返回码和必要的跨芯片传递边。"
-        "定义、枚举或转发命中不是产生证据，不能以一次宽搜零命中替代已知标识的引用/调用追踪，也不为补全整条链巡检芯片。"
-        "源码须与同事务日志核对，不能代替运行固件证明；"
-        "HTTP 5xx 时仅可在同一故障假设仍开放时收窄一次。"
-        "得到确认、排除或明确源码覆盖缺口后立即回到主分析；"
-        "设备持有数据或源码覆盖不足本身不等于嵌入式负责。"
+        "仅出现设备数据、设备错误码、固件版本未知、两端记录不一致，或需要清理/追溯设备内数据，都不能单独触发 MCP。调用前写明故障假设、指向它的现有证据、待改变的责任决策和足以确认或排除它的结果；"
+        "项目不明时才用 `example_list_projects`。先用最特异的事件、命令或错误码核对设备契约及同事务表现：若表现符合契约，立即判定嵌入式已排除并停止 MCP；若仍冲突，"
+        "才沿同一共享标识读取产生条件、返回码和必要的跨芯片传递边。定义、枚举或转发命中不是产生证据，不能以一次宽搜零命中替代已知标识的引用/调用追踪，也不为补全整条链巡检芯片。源码须与同事务日志核对，"
+        "不能代替运行固件证明；HTTP 5xx 时仅可在同一故障假设仍开放时收窄一次。得到确认、排除或明确源码覆盖缺口后立即回到主分析；设备持有数据或源码覆盖不足本身不等于嵌入式负责。"
         if embedded_wiki
         else ""
     )
     citation_rule = (
         f"第三、第四部分中的每个本地源码引用和修改文件都必须始终写成完整的 `{repository}/仓库内相对路径:行号`，重复引用也不能缩写；"
-        f"嵌入式 WIKI 引用单独写 `项目/芯片/仓内相对路径:行号` 并标明是远端参考，不得伪装成本地文件。"
-        f"禁止使用 `.../`、省略公共目录、只写文件名或从中间目录开始。"
-        f"不写镜像绝对路径或凭据。"
-        f"报告简洁，约 3600 字以内。"
+        f"嵌入式 WIKI 引用单独写 `项目/芯片/仓内相对路径:行号` 并标明是远端参考，不得伪装成本地文件。禁止使用 `.../`、省略公共目录、只写文件名或从中间目录开始。"
+        f"不写镜像绝对路径或凭据。报告简洁，约 3600 字以内。"
         if embedded_wiki
         else f"第三、第四部分中的每个源码引用和修改文件都必须始终写成完整的 `{repository}/仓库内相对路径:行号`，重复引用也不能缩写；"
-        f"禁止使用 `.../`、省略公共目录、只写文件名或从中间目录开始。"
-        f"不写镜像绝对路径或凭据。"
-        f"报告简洁，约 3600 字以内。"
+        f"禁止使用 `.../`、省略公共目录、只写文件名或从中间目录开始。不写镜像绝对路径或凭据。报告简洁，约 3600 字以内。"
     )
     prompt = "\n\n".join(
         (
             f"只读调查禅道 Bug #{bug_id}。当前目录是 {repository} 的源码视图。你负责从工单事实开始调查，并在本轮结束时直接输出完整中文报告。",
             evidence_rule,
-            "先给材料定角色：故障目标=形成异常的实现；"
-            "正确对照=说明正确表现的端/版本；"
-            "现象见证=展示或透传上游结果；"
-            "风险候选=可能改变主责、修改文件或方案的近邻；"
-            "其余丢弃。"
-            "复现端、候选层、截图或外部资料命中不自动新增故障目标。"
-            "只为故障目标关闭四项：①真实入口；"
-            "②异常参数/状态/分支/资源契约；"
-            "③机制如何形成现象；"
-            "④责任边界与修改点或外部输入。"
+            "先给材料定角色：故障目标=形成异常的实现；正确对照=说明正确表现的端/版本；现象见证=展示或透传上游结果；风险候选=可能改变主责、修改文件或方案的近邻；其余丢弃。"
+            "复现端、候选层、截图或外部资料命中不自动新增故障目标。只为故障目标关闭四项：①真实入口；②异常参数/状态/分支/资源契约；③机制如何形成现象；④责任边界与修改点或外部输入。"
             "仅当工单含独立异常或输出渠道才拆多条链，不按端、文件或候选拆链。",
-            "执行：不设固定工具调用次数；"
-            "每次调用必须说明会改变哪个仍开放的结论或方案，否则停止。"
-            "入口未知时，把页面标题、动作、特异文案、资源 key、事件名合并为一次有界检索，不逐词试探。"
-            "同一决策的相邻源码窗口、同文件方法和资源值合并读取；"
-            "不要每次复述台账。"
-            "本地辅助工具因参数、缓存或沙箱失败一次后不重试，改用一次有界文本检索或保留缺口。"
-            "只有下一次读取能区分当前仍开放的责任、修改范围或方案决策才继续；"
-            "全部形成证据闭环后立即写报告。",
-            "停止：每次读取必须改变一个仍开放的故障目标决策；"
-            "不能改变就不读。"
-            "正确对照只确认当前契约，现象见证只确认传递边界，两者不追根因、不查历史；"
-            "风险候选不另起调查。"
-            "调用方与签名、消费者与资源、状态写入与读取或源码与同事务日志形成互证时，只关闭其实际证明的决策；"
-            "当责任判断确实取决于错误起源时，纯转发不能替代产生证据，但不为补全链路而继续调查。"
-            "全部目标关闭立即写报告。"
-            "报告栏目、相似页面、截图其他控件不能授权继续调查。",
-            "条件权限：归属未定时只核对一个最可能改变 RN/Android/iOS/其他端归属的同级入口；"
-            "已有入口不做全端巡检。"
-            "文案从明确视觉事实追到真实消费者和资源，同名文本/key 仅是候选。"
-            "只有结论依赖可变状态时才追初始化与后续写入；"
-            "只有并发、顺序、重复、丢失、超时仍无法由已证契约解释时才查队列/重试；"
+            "执行：不设固定工具调用次数；每次调用须能区分仍开放的责任、修改范围或方案决策。入口未知时，把页面标题、动作、特异文案、资源 key、事件名合并为一次有界检索，不逐词试探。"
+            "同一决策的相邻源码窗口、同文件方法和资源值合并读取；不要每次复述台账。本地辅助工具因参数、缓存或沙箱失败一次后不重试，改用一次有界文本检索或保留缺口。",
+            "收尾：只关闭证据实际证明的决策。判断当前代码已修复、无需修改前，须确认工单异常条件下实际产生的信号或状态，能经当前产品的接收与调用条件到达处理入口，并完成预期动作；"
+            "已有处理函数、注释、某个回调或某层发出事件，都不能单独证明这条关系成立。关键触发或接收关系未确认，决策仍开放；当前源码明确缺少处理则给出修改，无法确认则说明具体缺口，不把未验证写成已修复，"
+            "也不把源码路径可达说成现场已验证。仅核对能改变责任、修改范围或方案的关键关系，结论已有充分证据或明确剩余缺口后立即写报告，不为补全无关链路继续调查。正确对照只确认当前契约，现象见证只确认传递边界，"
+            "两者不追根因、不查历史；风险候选只检查本次修改直接影响的契约，不另起调查。报告栏目、相似页面、截图其他控件不能授权继续调查。",
+            "条件权限：归属未定时只核对一个最可能改变 RN/Android/iOS/其他端归属的同级入口；已有入口不做全端巡检。文案从明确视觉事实追到真实消费者和资源，"
+            "同名文本/key 仅是候选。只有结论依赖可变状态时才追初始化与后续写入；只有并发、顺序、重复、丢失、超时仍无法由已证契约解释时才查队列/重试；"
             + ("云端已是边界时写所需输入并停止外猜。" if embedded_wiki else "源码无法区分多条可达路径时才用一次同设备同事务日志；设备、嵌入式或云端已是边界时写所需输入并停止外猜。"),
             *((embedded_rule,) if embedded_wiki else ()),
-            "历史：当前源码未复现不自动允许查历史。"
-            "仅当工单明确问回归/版本变化，或已知旧值到当前值的直接变更可关闭责任或方案时，才对故障目标的已验证入口文件运行一次 `python .deerflow-git-history-runner.py --path <文件> --max-commits 4`。"
-            "缺截图包版本/构建提交时，历史不能证明截图版本；"
-            "正确对照、见证、风险和相似页面禁止查历史。"
-            "直接移除只说明当前版本已修复，不去别处补造现因。",
-            "工具：先核对最相关 Tabby 候选，相关才沿调用/状态边继续。"
-            "只有定义/引用/类型关系会改变开放决策且已有定义路径:行号时，才用 `.deerflow-source-query-runner.py`；"
-            "资源 key 不是代码符号。"
-            "横向只查同一契约、开关或修改集合必需的兄弟项。"
-            "搜索命中和模型自述不算已读源码。"
-            "只读：不编辑、不构建测试、不安装、不写禅道；"
-            "文本检索≤30行、源码窗口≤100行、日志≤50行、每次 max_output_tokens≤2000。",
+            "历史：当前源码未复现不自动允许查历史。仅当工单明确问回归/版本变化，或已知旧值到当前值的直接变更可关闭责任或方案时，"
+            "才对故障目标的已验证入口文件运行一次 `python .deerflow-git-history-runner.py --path <文件> --max-commits 4`。"
+            "缺截图包版本/构建提交时，历史不能证明截图版本；正确对照、见证、风险和相似页面禁止查历史。历史中的直接移除仍须按收尾规则核对当前异常路径，不去别处补造现因。",
+            "工具：先核对最相关 Tabby 候选，相关才沿调用/状态边继续。只有定义/引用/类型关系会改变开放决策且已有定义路径:行号时，"
+            "才用 `.deerflow-source-query-runner.py`；资源 key 不是代码符号。横向只查同一契约、开关或修改集合必需的兄弟项。搜索命中和模型自述不算已读源码。"
+            "只读：不编辑、不构建测试、不安装、不写禅道；文本检索≤30行、源码窗口≤100行、日志≤50行、每次 max_output_tokens≤2000。",
             "最终只写四个一级标题：一、分析结论；二、责任端与责任层；三、根本原因及源码证据；四、修改范围与其他端风险。第三部分保留关键源码仓库路径、行号、短原句及具体尚未闭合的边。",
             "若本轮调用过 `examplewiki`，第二部分必须单列`嵌入式判定：未涉及|已排除|已确认|证据不足`并说明依据；`已排除`或`未涉及`时不得在主要涉及端、配合项或待确认输入中继续归责嵌入式。"
-            "第四部分第一行必须是`主要涉及端：`；"
-            "只有嵌入式已确认，或证据已将未闭合故障边限定在嵌入式但 WIKI 覆盖不足时，才写`嵌入式配合：`；"
-            "后端同理写`后端配合：`与具体同步边，没有该证据则省略。"
-            "设备持有数据、现场固件映射、历史记录或测试日志缺口，应按实际数据提供方填写，不能默认写成嵌入式配合；"
+            "第四部分第一行必须是`主要涉及端：`；只有嵌入式已确认，或证据已将未闭合故障边限定在嵌入式但 WIKI 覆盖不足时，才写`嵌入式配合：`；后端同理写`后端配合：`与具体同步边，"
+            "没有该证据则省略。设备持有数据、现场固件映射、历史记录或测试日志缺口，应按实际数据提供方填写，不能默认写成嵌入式配合；"
             "在`本地代码修改：`之前固定写一行`待确认输入：`，逐项写明提供方与具体所需信息（如`PRD：目标图；设计：素材`），确无待确认输入时写`待确认输入：无`；最后写`本地代码修改：`。"
             "不要另写客户端配合或内部 target/确定性计数。",
             "第四部分沿第三部分已证事实写具体问题、处理位置和下一步；同一单中已能修改和仍需确认的部分应分别交付。"
@@ -287,7 +237,10 @@ async def investigate_bug_with_codex(
             "已定位修改处但缺产品目标、设计素材或接口契约时，写清已证问题、修改处、缺什么、由谁提供及到位后如何修改，"
             "不得用`暂无可确定的本地代码替换`概括整单。当前源码已修则写无需重复修改及待核对的发布版本；"
             "责任边界未定则写已证失败边和需谁确认什么，不提前指定单一主责。"
-            "仅对尚不能确定替换的部分写明缺口。任何替换都必须核对实际接口签名、触发条件和因果前提，不能用兜底值或只读消费者冒充根因修复。",
+            "仅对尚不能确定替换的部分写明缺口。任何替换都必须核对实际接口签名、触发条件和因果前提，不能用兜底值或只读消费者冒充根因修复。"
+            "共享代码改动涉及原生方法、事件、参数或返回值时，从拟议改动沿直接相关的注册、调用、回调和清理逻辑，核对实际会执行该改动的平台及其接口支持；故障只在一端复现，不代表共享改动只影响该端。"
+            "检查限于这些具体关系，不做全文搜索、全仓扫描或全端巡检，不要求无关端补日志，也不把它新增为故障目标。平台能力不同时，在本地修改方案及修改前后代码中明确执行范围和兼容处理，注册与清理均须覆盖，"
+            "不能仅在回调内判断平台；只修某端时保持其他端原有行为，不无条件调用其不支持的接口，不擅自删除原有接口或扩展为全端改造。",
             citation_rule,
             "工单原始事实：\n" + ticket,
             "DeerFlow 前置材料（线索，不是已证明根因）：\n" + context,
@@ -328,23 +281,33 @@ async def investigate_bug_with_codex(
                 "set max_output_tokens at or below 2000 for every tool call; never "
                 "dump a complete file, directory, archive or log. A proposed code "
                 "replacement must be checked against exact API signatures, trigger "
-                "conditions and its causal precondition. "
+                "conditions and its causal precondition. For shared-code changes touching "
+                "native contracts, follow only the proposed change's direct registration, "
+                "call, callback and cleanup logic to identify executing platforms and "
+                "their support. Put necessary platform scoping and compatibility in the "
+                "replacement, preserving unaffected behavior; do not infer safety from "
+                "single-platform incident logs, check only inside the callback, or perform "
+                "full-text searches, repository-wide scans or all-platform audits. "
                 "Follow the prompt's evidence-role-aware four-decision investigation ledger. "
                 "Before every command, classify the material as a fault target, correct "
                 "reference, symptom witness, risk candidate, or irrelevant candidate, then "
-                "identify which still-open fault-target decision the result can change; "
+                "identify which still-open responsibility, change-scope or solution "
+                "decision the result can change, including compatibility of the proposed change; "
                 "otherwise do not run it. A correct reference may only be read far enough "
                 "to establish its current contract, and a symptom witness only far enough "
                 "to establish the pass-through boundary. Optional tools, candidate layers "
-                "and report sections are not a completion checklist. Once every fault "
-                "target's real entry, failure mechanism, observed symptom, responsibility "
-                "boundary and change point are closed, stop. "
+                "and report sections are not a completion checklist. An already-fixed "
+                "claim requires the ticket's abnormal condition to reach the current "
+                "product's actual receiver and handler and complete the expected action; "
+                "a handler's existence or an emitted event alone is insufficient. "
+                "Unverified trigger/receiver edges remain open. "
                 "Prepared Tabby snippets remain candidates until verified in the current "
                 "checkout. Use the source-query and file-history runners only under their "
                 "decision-changing conditions in the prompt; they are not mandatory stages. "
                 "Do not impose a fixed tool-call budget. Continue only while the next read can "
                 "change an open responsibility, change-scope, or solution decision; stop once "
-                "those decisions have evidence closure. Batch exact ticket anchors for entry "
+                "those decisions have sufficient evidence or explicit remaining gaps. "
+                "Source reachability is not incident verification. Batch exact ticket anchors for entry "
                 "discovery and adjacent reads, and do not narrate the full ledger after every "
                 "command. Retry no failed local helper invocation for argument, "
                 "cache, or sandbox repair; use one bounded text-search fallback instead. "
@@ -352,13 +315,14 @@ async def investigate_bug_with_codex(
                 "ticket has a regression/version question or a known old-to-current change can "
                 "close responsibility. Missing build identity does not authorize history. Never "
                 "use history for a reference, witness, risk candidate, or merely similar page. "
-                "A directly matching historical removal means the checked-out version is "
-                "already fixed, never a reason to invent a current cause elsewhere."
+                "A directly matching historical removal still requires checking the current "
+                "abnormal-condition path before claiming already fixed, never inventing a "
+                "current cause elsewhere."
                 + (
                     " The optional examplewiki MCP is gated by an evidence-backed embedded fault "
                     "hypothesis, not by the mere presence of device data, an error code, unknown "
-                    "firmware, or a cross-system discrepancy. Use the existing log index first "
-                    "if the handoff omitted a relevant line. Before calling MCP, state the "
+                    "firmware, or a cross-system discrepancy. Do not assume runtime logs were "
+                    "searched or available. Before calling MCP, state the "
                     "hypothesis, its incident evidence, the responsibility decision it can change, "
                     "and the result sufficient to confirm or exclude it. Check the embedded "
                     "contract against the same-transaction observation first. A matching contract "
@@ -479,9 +443,7 @@ async def investigate_bug_with_codex(
                 + str(report_error)
                 + "。请在原会话已读证据基础上重新输出完整四段；"
                 + ("第二段必须单列`嵌入式判定：未涉及|已排除|已确认|证据不足`并说明依据；" if embedded_wiki_used else "")
-                + "第四段首行`主要涉及端：`；"
-                "嵌入式已排除或未涉及时，主要涉及端、配合项和待确认输入均不得继续归责嵌入式；"
-                "有证据才写`嵌入式配合：`或`后端配合：`。"
+                + "第四段首行`主要涉及端：`；嵌入式已排除或未涉及时，主要涉及端、配合项和待确认输入均不得继续归责嵌入式；有证据才写`嵌入式配合：`或`后端配合：`。"
                 "在`本地代码修改：`之前固定写`待确认输入：提供方：具体信息`，无缺口时写`待确认输入：无`，最后写`本地代码修改：`。"
                 "同一单中已能修改和仍需确认的部分分别写清；已定位修改处但缺目标、素材或契约时写明提供方与到位后的动作，当前源码已修则写明发布核对，"
                 "不得用`暂无可确定的本地代码替换`概括整单。可确定替换才成对给`修改前：`和`修改后：`；不新增事实。"
@@ -585,13 +547,3 @@ def _codex_config(codex_bin: str | None):
         if local_cli:
             return CodexConfig(codex_bin=local_cli)
     return CodexConfig()
-
-
-async def require_codex_runtime(*, codex_bin: str | None = None) -> None:
-    """Fail before spending investigation calls if local Codex cannot start."""
-    from openai_codex import AsyncCodex
-
-    async with AsyncCodex(_codex_config(codex_bin)) as codex:
-        account = await codex.account()
-        if account.requires_openai_auth and account.account is None:
-            raise RuntimeError("Local Codex is not authenticated for Bug conclusions")

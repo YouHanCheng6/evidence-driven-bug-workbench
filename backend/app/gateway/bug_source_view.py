@@ -33,7 +33,6 @@ SOURCE_QUERY_RUNTIME = ".deerflow-source-query.py"
 SOURCE_QUERY_LAUNCHER = ".deerflow-source-query-runner.py"
 GIT_HISTORY_RUNTIME = ".deerflow-git-history.py"
 GIT_HISTORY_LAUNCHER = ".deerflow-git-history-runner.py"
-LOG_QUERY_RUNTIME = ".deerflow-log-query.py"
 LOG_CACHE_DIRECTORY = ".deerflow-runtime-evidence"
 SOURCE_VIEW_EXCLUDED_DIRECTORIES = frozenset(
     {
@@ -129,11 +128,7 @@ def _source_view_file_allowed(
     runtime_dist_roots: frozenset[Path],
 ) -> bool:
     excluded_parts = {part.lower() for part in relative_path.parts} & SOURCE_VIEW_EXCLUDED_DIRECTORIES
-    if excluded_parts and not (
-        excluded_parts == {"dist"}
-        and relative_path in tracked_files
-        and path_is_in_runtime_dist(relative_path, runtime_dist_roots)
-    ):
+    if excluded_parts and not (excluded_parts == {"dist"} and relative_path in tracked_files and path_is_in_runtime_dist(relative_path, runtime_dist_roots)):
         return False
     lower_name = relative_path.name.lower()
     if lower_name in SOURCE_VIEW_EXCLUDED_FILENAMES:
@@ -174,14 +169,7 @@ def materialize_bug_source_view(source_root: Path, view_root: Path, *, repositor
             directory_names[:] = [
                 name
                 for name in directory_names
-                if not (current / name).is_symlink()
-                and (
-                    name.lower() not in SOURCE_VIEW_EXCLUDED_DIRECTORIES
-                    or (
-                        name.lower() == "dist"
-                        and directory_is_required_for_runtime_dist(relative_directory / name, runtime_dist_roots)
-                    )
-                )
+                if not (current / name).is_symlink() and (name.lower() not in SOURCE_VIEW_EXCLUDED_DIRECTORIES or (name.lower() == "dist" and directory_is_required_for_runtime_dist(relative_directory / name, runtime_dist_roots)))
             ]
             target_directory = view_root / relative_directory
             target_directory.mkdir(parents=True, exist_ok=True)
@@ -226,7 +214,6 @@ def materialize_bug_source_view(source_root: Path, view_root: Path, *, repositor
         for runtime_name, runtime_module in (
             (SOURCE_QUERY_RUNTIME, "bug_source_query_runtime.py"),
             (GIT_HISTORY_RUNTIME, "bug_git_history_runtime.py"),
-            (LOG_QUERY_RUNTIME, "bug_log_query_runtime.py"),
         ):
             runtime_relative = Path(runtime_name)
             desired_files.add(runtime_relative)

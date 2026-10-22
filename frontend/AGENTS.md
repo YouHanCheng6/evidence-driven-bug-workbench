@@ -5,8 +5,16 @@
 `src/app/workspace/bugs/page.tsx`, `source-evidence-panel.tsx`, and the Feishu
 conversation page are source showcases for the personal workflow. They consume
 the backend persisted investigation, evidence, report and verified-note
-projections instead of owning orchestration. Historical repair/rollback fields
-may still be displayed, but new runs do not launch repair.
+projections instead of owning orchestration. New runs may execute explicitly
+configured repair after note verification; public example configuration disables
+it. Workbench creation inherits the operator setting. `repairing` is busy and
+`note_written` is terminal after execution, while `repair_outcome` separately
+distinguishes completed, partial, incomplete and not-required results. Never label
+partial/incomplete execution as successful completion. Show actual file counts
+and complete repository-qualified paths. `core/bugs/workbench.ts` owns timeline
+and rollback/restore selection; API actions update the selected snapshot without
+a new investigation or model call. Conflicts preserve current files. Historical
+real diffs remain readable, but legacy engines cannot be restarted.
 Sample repository identifiers and author labels are fictional. Consult
 `../docs/personal/SOURCE_MAP.md`; there are no real tickets, source mirrors or
 production UI screenshots here. End-to-end runtime compatibility is unverified.

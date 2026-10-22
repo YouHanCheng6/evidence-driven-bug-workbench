@@ -86,16 +86,10 @@ class BugPlatformResolutionConfig(BaseModel):
 
 
 class BugLogExpertConfig(BaseModel):
-    """One bounded no-tools call that turns raw log excerpts into runtime facts."""
+    """Read-only Luna selection of indexed runtime-log records."""
 
-    model_name: str | None = Field(
-        default=None,
-        description="Optional model override for pre-investigation log evidence curation.",
-    )
-    max_material_chars: int = Field(default=80_000, ge=8_000, le=200_000)
-    max_output_tokens: int = Field(default=1_500, ge=500, le=4_000)
-    max_evidence_items: int = Field(default=4, ge=1, le=4)
-    thinking_enabled: bool = False
+    model_name: str = Field(default="gpt-6-luna", description="Codex model used to select runtime-log source lines.")
+    reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh", "max"] = "medium"
 
 
 class BugVisualEvidenceConfig(BaseModel):
@@ -108,8 +102,16 @@ class BugVisualEvidenceConfig(BaseModel):
     )
 
 
+class BugNoteRepairConfig(BaseModel):
+    """Execute this run's report section four after verified note writeback."""
+
+    enabled: bool = False
+    model_name: str = "example-repair-model"
+    timeout_seconds: float = Field(default=600.0, gt=0, le=3600)
+
+
 class BugAnalysisConfig(BaseModel):
-    """Configuration for the single Bug Workbench investigation path."""
+    """Codex investigation with optional execution of this run's report."""
 
     engine: Literal["codex"] = "codex"
     business_knowledge_file: str = "knowledge/bug-business-rules.json"
@@ -118,3 +120,4 @@ class BugAnalysisConfig(BaseModel):
     log_expert: BugLogExpertConfig = Field(default_factory=BugLogExpertConfig)
     visual: BugVisualEvidenceConfig = Field(default_factory=BugVisualEvidenceConfig)
     summary: BugAnalysisSummaryConfig = Field(default_factory=BugAnalysisSummaryConfig)
+    repair: BugNoteRepairConfig = Field(default_factory=BugNoteRepairConfig)

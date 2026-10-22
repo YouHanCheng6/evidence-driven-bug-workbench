@@ -7,7 +7,7 @@ from typing import Literal
 
 from deerflow.persistence.thread_meta import ThreadMetaStore
 
-BugWorkbenchScope = Literal["latest", "list", "by_bug_id"]
+BugWorkbenchScope = Literal["latest", "list", "by_bug_id", "latest_change"]
 _PAGE_SIZE = 100
 _MAX_LIST_LIMIT = 50
 
@@ -52,8 +52,19 @@ async def read_bug_workbench(
         ),
         reverse=True,
     )
-    if scope == "by_bug_id":
+    if scope in {"by_bug_id", "latest_change"}:
         roots = [entry for entry in roots if entry[1].get("bug_id") == bug_id]
+    if scope == "latest_change":
+        roots = [
+            entry
+            for entry in roots
+            if isinstance(entry[1].get("rollback"), dict)
+            and entry[1]["rollback"].get("available")
+            and entry[1]["rollback"].get("files")
+            and (entry[1].get("changed_files") or entry[1]["rollback"].get("completed") or entry[1]["rollback"].get("pending_action") or entry[1].get("status") == "repairing" or entry[1].get("result_contract_version") != 3)
+        ]
+        # A later rollback of an old run must not make it the newest modification.
+        roots.sort(key=lambda entry: (str(entry[0].get("created_at") or ""), str(entry[0].get("thread_id") or "")), reverse=True)
 
     total = len(roots)
     bounded_limit = max(1, min(limit, _MAX_LIST_LIMIT))

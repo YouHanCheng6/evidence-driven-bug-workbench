@@ -1,7 +1,7 @@
 {
   "schema_version": 3,
   "edition": "sanitized personal customization showcase",
-  "export_date": "2026-10-13",
+  "export_date": "2026-10-22",
   "public_base_commit": "88252e9b318d34e7e1867155ad2c77993320788e",
   "source": "author-requested sanitized snapshot of current source files; original Agent workspace remains untouched",
   "runtime_verified": false,
@@ -9,9 +9,10 @@
     {
       "path": ".env.example",
       "source_state": "tracked_worktree",
-      "lines": 110,
-      "redactions": 2,
-      "sha256": "ff121ff79c904624205525a922520786f9885c6d0fc98c953be74f41bb2415f9"
+      "lines": 112,
+      "sha256": "c5c01f89ddc2f6032f6e613f7c2938ac29eadd752f5cec7e9524e8d7b617199a",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "Makefile",
@@ -30,9 +31,10 @@
     {
       "path": "backend/app/channels/manager.py",
       "source_state": "tracked_worktree",
-      "lines": 3680,
-      "redactions": 18,
-      "sha256": "0ff7b07edf1ee77023560ca444e57f6468700ece43046e45ac4892f2ff7384be"
+      "lines": 3734,
+      "sha256": "b74c0c767ece61bb8f5275aefce37b8899b27a559cfa952594f31106bc2e985c",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/channels/service.py",
@@ -51,10 +53,10 @@
     {
       "path": "backend/app/gateway/bug_attachment_evidence.py",
       "source_state": "tracked_worktree",
-      "lines": 996,
-      "sha256": "97f10003a02a41cde58104a0d6f6c1c086d48d186fe4af877b63a679f653b7b8",
-      "snapshot_date": "2026-10-13",
-      "sanitization": "Reviewed example identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 702,
+      "sha256": "989c90bdc00b9bfe5055fbbbe137f5d8bab9e3b250f4dade41b71517f0e2d655",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_business_knowledge.py",
@@ -73,10 +75,10 @@
     {
       "path": "backend/app/gateway/bug_codex_summary.py",
       "source_state": "untracked",
-      "lines": 597,
-      "sha256": "915594135d18b6d1a38bf7bc27833d00db188c2ebef240d2f74a1c3b59f51f10",
-      "snapshot_date": "2026-10-13",
-      "sanitization": "Reviewed example identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 549,
+      "sha256": "7c57ecc54fea38c20c38b60597ef2f1070452890a0aea17bc0541e6569a1bb39",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_git_history_runtime.py",
@@ -88,33 +90,42 @@
     {
       "path": "backend/app/gateway/bug_investigator.py",
       "source_state": "tracked_worktree",
-      "lines": 442,
-      "sha256": "5dc319dd13d29708599ee1f21f364782f12dea1d59e6db584f4b5b7014b3fc0f",
-      "snapshot_date": "2026-10-13",
-      "sanitization": "Reviewed example identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 509,
+      "sha256": "037f0d95f056a4581db529e4952b7767e421f4f06272f171dd5153097025abf9",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_log_expert.py",
       "source_state": "tracked_worktree",
-      "lines": 965,
-      "sha256": "91b1c4176b3d1deebf2aee5f0d1da72572cdc4a2cd6d3551fb337d0d42c3057d",
-      "snapshot_date": "2026-10-13",
-      "sanitization": "Reviewed example identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 246,
+      "sha256": "bb16224c31402c4138f2756db6d7efce8e52c973d54ebfbdedec606244a58eb7",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_log_query_runtime.py",
       "source_state": "untracked",
-      "lines": 305,
-      "sha256": "832eebe62113af529b762b251feab3c8ec8c207a5db4c77274b0fd406fd54de6",
-      "snapshot_date": "2026-10-13",
-      "sanitization": "Reviewed example identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 243,
+      "sha256": "1ab0aaf7fe16915822bba1eafb309dde86d6750063e3cc286ca0552566ea8a59",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
+    },
+    {
+      "path": "backend/app/gateway/bug_note_repair.py",
+      "source_state": "untracked",
+      "sha256": "cfb68f6ac41833eb05c5564560610ff4e1379a3bba6ebe0943ea8e853d161b29",
+      "lines": 340,
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_rollback.py",
       "source_state": "tracked_worktree",
-      "lines": 502,
-      "redactions": 0,
-      "sha256": "a38aaf244642a24ef985ca0615448055116905e8dfd6c95e6ce2cf02695c882a"
+      "lines": 527,
+      "sha256": "70b34fe206374e2dc821eafa2bc7c450a8981eb47beb1c93e10f569ec649b154",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_runtime_source_policy.py",
@@ -133,17 +144,18 @@
     {
       "path": "backend/app/gateway/bug_source_retrieval.py",
       "source_state": "untracked",
-      "lines": 2589,
-      "sha256": "3fac509701a812fa6fbb1a75f2938bd87d2c722cdb81006ea0ca664636a11bbf",
-      "snapshot_date": "2026-10-13",
-      "sanitization": "Reviewed example identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 2343,
+      "sha256": "3e20c6920f8863b9130aa829391f2f4d4a4701477527b2c432d8b10f8d7ffd26",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_source_view.py",
       "source_state": "tracked_worktree",
-      "lines": 276,
-      "redactions": 0,
-      "sha256": "915083d9af7300af42b21a74303eb1fa74d38e845ac37288b9418fed69467b46"
+      "lines": 263,
+      "sha256": "19cb92453e318141a15d3811d9c77917c8d03fa7c946f64a0aa4b44ba4da7354",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_triage.py",
@@ -156,10 +168,10 @@
     {
       "path": "backend/app/gateway/bug_workflow.py",
       "source_state": "tracked_worktree",
-      "lines": 2130,
-      "sha256": "a55d692147a5b990b7a9464105acab01b012e8b114a6a414b9a3187db299cac3",
-      "snapshot_date": "2026-10-13",
-      "sanitization": "Reviewed example identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 1998,
+      "sha256": "70b773cd51be2ecfca71161511c4dee1d9a25195279494b8c177ccaecef39b2a",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_workflow_events.py",
@@ -171,23 +183,26 @@
     {
       "path": "backend/app/gateway/bug_workflow_models.py",
       "source_state": "tracked_worktree",
-      "lines": 195,
-      "redactions": 0,
-      "sha256": "60f9278350112692de8f09e6a4b3cc370f9023d664634bc6574a27ed2a204aab"
+      "lines": 200,
+      "sha256": "0f1a94cdebdb35e7ad75661648b91196113e476e733c819180df90f794854c26",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_workflow_state.py",
       "source_state": "tracked_worktree",
-      "lines": 242,
-      "redactions": 2,
-      "sha256": "7c70a3deab807a74f906d3203623f6c586e497b8b5f3ff135a8682767ea73eb0"
+      "lines": 247,
+      "sha256": "1ca91dadc5aefb0ffc2ef031ed2e5daaf401b743c3c3a291686b3164e58b930f",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/main_agent_bug_batch.py",
       "source_state": "untracked",
-      "lines": 555,
-      "redactions": 0,
-      "sha256": "3f3b4e5d87f17a2aca12af032bb0cf1d1c6e819d1bff041c663076ff71fd48a9"
+      "lines": 572,
+      "sha256": "6178d6211d3516477b23f6395ea6ce294aeb1ad8dacabb4bbdf6069c841085db",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/main_agent_bug_selection.py",
@@ -199,9 +214,10 @@
     {
       "path": "backend/app/gateway/main_agent_workbench.py",
       "source_state": "untracked",
-      "lines": 65,
-      "redactions": 0,
-      "sha256": "4d8112bd02a8db8aa5ce156f4c8259514890934bccddd79efce323d874a93068"
+      "lines": 92,
+      "sha256": "d23e463864b664ccc7e34772f47e49cf76725693776d978597742290443c7eba",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/routers/__init__.py",
@@ -213,9 +229,10 @@
     {
       "path": "backend/app/gateway/routers/bug_workflows.py",
       "source_state": "tracked_worktree",
-      "lines": 584,
-      "redactions": 1,
-      "sha256": "405155ec2b4ddd7804b000913fe77e7dc3c1fb2fde651041fc6e0b883d3509c6"
+      "lines": 642,
+      "sha256": "8192d2835c415ad0d3a2fff217df2947a84dfcf81b3957f56c1cd8666d400564",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/routers/threads.py",
@@ -241,9 +258,10 @@
     {
       "path": "backend/packages/harness/deerflow/agents/lead_agent/agent.py",
       "source_state": "tracked_worktree",
-      "lines": 1005,
-      "redactions": 1,
-      "sha256": "49da57e24accb79061cdb58559c6b212e9c02de2b91cafb2c8b80ddbb1ba9ff9"
+      "lines": 1006,
+      "sha256": "ba4f0595306c915978774cae567a1220e6c2fcd47aa6c9e7d8cbbe80fec234b2",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/packages/harness/deerflow/agents/lead_agent/prompt.py",
@@ -353,10 +371,10 @@
     {
       "path": "backend/packages/harness/deerflow/config/bug_analysis_config.py",
       "source_state": "tracked_worktree",
-      "lines": 120,
-      "sha256": "f183ba833b7c7505408c62da891b24d928ec316b938372b2b0055c4fc942df61",
-      "snapshot_date": "2026-10-13",
-      "sanitization": "Reviewed example identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 123,
+      "sha256": "920e40dfb8f174c81f4efb90e6d251a0470773886b4439b57a4b920954316ea6",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/packages/harness/deerflow/models/factory.py",
@@ -368,9 +386,10 @@
     {
       "path": "backend/packages/harness/deerflow/persistence/bug_workbench.py",
       "source_state": "tracked_worktree",
-      "lines": 61,
-      "redactions": 0,
-      "sha256": "3aebd37b84ec7921d93acee81ad155e530bfdedbe43df56b21d89d650be29d77"
+      "lines": 72,
+      "sha256": "c2f8ceef6401cf9f0622284fe8b8e8eb07aaa70d8262bb11d9520e2efda046c1",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/packages/harness/deerflow/persistence/run/sql.py",
@@ -459,9 +478,10 @@
     {
       "path": "backend/packages/harness/deerflow/tools/builtins/start_bug_workbench_tool.py",
       "source_state": "untracked",
-      "lines": 21,
-      "redactions": 0,
-      "sha256": "5688dbb680b364235a5ecd6ff72fceada1bca7791d4f465ed097759b0f02ff3e"
+      "lines": 35,
+      "sha256": "50bf2f3d9fa269c7245855fa7ee96833855da221e83a8c1948f40f666d2ec387",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/packages/harness/deerflow/utils/oneshot_llm.py",
@@ -543,10 +563,10 @@
     {
       "path": "backend/scripts/bug_workflow/evaluate_tabby_retrieval.py",
       "source_state": "untracked",
-      "lines": 213,
-      "sha256": "38afa7bf1ea1c3ef25d8ffd9699dd12013401f50a4e0cfccdf99a091bd945de5",
-      "snapshot_date": "2026-10-13",
-      "sanitization": "Reviewed example identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 230,
+      "sha256": "1a356f124a3fac4edb4ebc855e792816c13ba86f6a2ed05c177ad5e5339d9594",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/scripts/bug_workflow/prepare_tabby_repositories.py",
@@ -588,10 +608,10 @@
     {
       "path": "config.example.yaml",
       "source_state": "tracked_worktree",
-      "lines": 2653,
-      "sha256": "532d20fdbd65d535049c89ece7d461e514f63e412accc3308eb6e3400b2411f2",
-      "snapshot_date": "2026-10-13",
-      "sanitization": "Reviewed example identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 2666,
+      "sha256": "22645cb0f4c3c049bb41470be7e5b1e595495c1abe674774b4fb32e408912575",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "extensions_config.example.json",
@@ -624,9 +644,10 @@
     {
       "path": "frontend/src/app/workspace/bugs/page.tsx",
       "source_state": "tracked_worktree",
-      "lines": 1182,
-      "redactions": 8,
-      "sha256": "36e3569209b17f780b120d069f8911a212007a9c6b724ee2c4a21306698249d9"
+      "lines": 1223,
+      "sha256": "f226a9826a4d41a263e18e2afa386c5b8a8d0b905c5b65809c0d0cbd95f1b73b",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "frontend/src/app/workspace/chats/page.tsx",
@@ -701,16 +722,18 @@
     {
       "path": "frontend/src/core/bugs/api.ts",
       "source_state": "tracked_worktree",
-      "lines": 504,
-      "redactions": 2,
-      "sha256": "0c059d2afabbfe6afcdbbf2659736849b516196723abfc49bda671d3d18c5f18"
+      "lines": 555,
+      "sha256": "6ee093f8481f978758ea7859d68da4f56baee7b717d5f51a35575ad8d701a63e",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "frontend/src/core/bugs/workbench.ts",
       "source_state": "tracked_worktree",
-      "lines": 168,
-      "redactions": 2,
-      "sha256": "a27142bd2a91759d1f1481a64871bde5a2043426ba21c243438a174cabd97a3e"
+      "lines": 199,
+      "sha256": "409734279d9ced0cb7bfc1d6cbe296e0bddd88306e1013ff922697d68352ef12",
+      "snapshot_date": "2026-10-22",
+      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "frontend/src/core/feishu-conversations/api.ts",
@@ -786,7 +809,8 @@
   "scope_note": "Incremental Bug Workbench refresh; independent railway, exam and mini-program applications excluded.",
   "showcase_adjustments": [
     "Enterprise names, repository conventions, WIKI adapter names and connection fields replaced by fictional examples.",
-    "Retired visual-model implementation removed at author request; Codex visual extraction retained.",
-    "No runtime credentials, knowledge content, source mirrors, tickets or log indexes included."
+    "Retired visual-model implementation removed at author request; direct ephemeral Codex visual extraction retained.",
+    "Optional scoped report-section repair and bidirectional snapshots included; repair remains disabled in the public example.",
+    "Runtime-log records selected through a private index; no credentials, knowledge content, source mirrors, tickets, snapshots or log indexes included."
   ]
 }

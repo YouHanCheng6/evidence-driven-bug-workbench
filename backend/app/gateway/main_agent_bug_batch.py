@@ -1,4 +1,4 @@
-"""Durable, bounded batches of existing read-only Bug Workbench workflows."""
+"""Durable, bounded batches of the configured Bug Workbench workflow."""
 
 from __future__ import annotations
 
@@ -292,9 +292,7 @@ async def cancel_bug_batch(runtime: Any, *, batch_id: str | None = None) -> str:
         # include only that first serial item as a possible active child.
         if first_pending_index is not None and not active_workflow_ids:
             identifier = int(items[first_pending_index]["bug_id"])
-            active_workflow_ids.append(
-                f"bug-workflow-{uuid.uuid5(uuid.NAMESPACE_URL, f'{owner}:{resolved_id}:{identifier}').hex}"
-            )
+            active_workflow_ids.append(f"bug-workflow-{uuid.uuid5(uuid.NAMESPACE_URL, f'{owner}:{resolved_id}:{identifier}').hex}")
 
         stopped_at = datetime.now(UTC).isoformat()
         state["status"] = "cancelled"
@@ -350,7 +348,18 @@ def _format_item(item: Mapping[str, Any]) -> str:
     identifier = item.get("bug_id")
     status = str(item.get("status") or "queued")
     if status == "note_written":
-        return f"#{identifier}｜主要涉及端：{item.get('primary_side') or '报告未给出'}｜需配合：{item.get('cooperation') or '报告未标注'}｜待确认输入：{item.get('pending_input') or '报告未标注'}"
+        text = f"#{identifier}｜主要涉及端：{item.get('primary_side') or '报告未给出'}｜需配合：{item.get('cooperation') or '报告未标注'}｜待确认输入：{item.get('pending_input') or '报告未标注'}"
+        if item.get("auto_repair_enabled"):
+            files = item.get("changed_files") or []
+            if item.get("repair_outcome") and item.get("repair_report"):
+                text += "\n" + str(item["repair_report"])
+            else:
+                text += f"｜实际修改 {len(files)} 个文件"
+            if files and not item.get("repair_outcome"):
+                text += "\n" + "\n".join(files)
+            elif item.get("repair_report") and not item.get("repair_outcome"):
+                text += "\n" + str(item["repair_report"])
+        return text
     if status == "awaiting_clarification":
         return f"#{identifier}｜待补充信息；请到 Bug 工作台处理"
     if status in {"awaiting_evidence", "awaiting_repair_choice", "awaiting_acceptance"}:
@@ -358,7 +367,10 @@ def _format_item(item: Mapping[str, Any]) -> str:
     if status == "skipped":
         return f"#{identifier}｜已解决或关闭，跳过"
     if status in {"failed", "analysis_incomplete", "cancelled", "launch_failed", "workflow_stalled", "accepted", "rolled_back"}:
-        return f"#{identifier}｜{status}；请到 Bug 工作台查看"
+        text = f"#{identifier}｜{status}；请到 Bug 工作台查看"
+        if item.get("repair_outcome") and item.get("repair_report"):
+            text += "\n" + str(item["repair_report"])
+        return text
     return f"#{identifier}｜{status}"
 
 
@@ -421,7 +433,7 @@ async def _process_item(
                         response = await client.post(
                             f"{_gateway_url()}/api/bug-workflows",
                             headers=headers,
-                            json={"bug_id": identifier, "auto_repair": False, "idempotency_key": f"{state['id']}:{identifier}"},
+                            json={"bug_id": identifier, "idempotency_key": f"{state['id']}:{identifier}"},
                         )
                     response.raise_for_status()
                     payload = response.json()
@@ -467,6 +479,11 @@ async def _process_item(
                         item["status"] = status
                         if status == "note_written":
                             item["primary_side"], item["cooperation"], item["pending_input"] = _short_report_fields(str(payload.get("analysis_report") or ""))
+                        if status in {"note_written", "failed"}:
+                            item["auto_repair_enabled"] = payload.get("auto_repair_enabled") is True
+                            item["changed_files"] = list(payload.get("changed_files") or [])
+                            item["repair_report"] = payload.get("repair_report")
+                            item["repair_outcome"] = payload.get("repair_outcome")
                         await _save(store, state["id"], owner, state)
                 if status in _BATCH_TERMINAL:
                     return

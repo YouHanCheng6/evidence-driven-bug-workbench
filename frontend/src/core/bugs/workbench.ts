@@ -2,6 +2,26 @@ import { type BugWorkflow } from "@/core/bugs/api";
 
 export type BugWorkbenchStage = "ready" | "analysis_requested" | "note_written";
 
+export function getBugCodeChangeAction(
+  workflow: BugWorkflow | null,
+): "rollback" | "restore" | null {
+  if (
+    !workflow?.rollback?.available ||
+    ![
+      "note_written",
+      "awaiting_acceptance",
+      "accepted",
+      "failed",
+      "cancelled",
+      "rolled_back",
+    ].includes(workflow.status)
+  )
+    return null;
+  if (workflow.rollback.completed)
+    return workflow.rollback.restorable ? "restore" : null;
+  return "rollback";
+}
+
 export type BugEvidenceAssetStatus =
   | "queued"
   | "downloading"
@@ -40,6 +60,7 @@ export function getBugWorkflowStatusLabel(
   clarificationType: BugWorkflow["clarification_type"] | undefined,
   repairAttempted = false,
   failureKind?: string | null,
+  repairOutcome?: BugWorkflow["repair_outcome"],
 ): string {
   switch (status) {
     case "routing":
@@ -58,9 +79,12 @@ export function getBugWorkflowStatusLabel(
     case "awaiting_repair_choice":
       return "旧版只读任务";
     case "note_written":
-      return repairAttempted ? "历史修复已结束，零 diff" : "分析与建议已交付";
+      if (repairOutcome === "partial") return "分析已完成，代码修改部分完成";
+      if (repairOutcome === "incomplete") return "分析已完成，代码修改未完成";
+      if (repairOutcome === "not_required") return "分析已完成，无需修改代码";
+      return repairAttempted ? "分析与备注修改已完成" : "分析与建议已交付";
     case "repairing":
-      return "历史任务处于修复状态";
+      return "正在按备注修改代码";
     case "awaiting_acceptance":
       return "等待你的验收";
     case "accepted":
@@ -72,16 +96,23 @@ export function getBugWorkflowStatusLabel(
     case "cancelled":
       return "分析已取消";
     case "failed":
-      if (failureKind === "analysis_execution_failed") return "Codex 源码调查失败";
-      if (failureKind === "note_write_failed") return "分析已完成，禅道回写失败";
-      if (failureKind === "note_generation_failed") return "分析已完成，备注生成失败";
+      if (failureKind === "analysis_execution_failed")
+        return "Codex 源码调查失败";
+      if (failureKind === "note_write_failed")
+        return "分析已完成，禅道回写失败";
+      if (failureKind === "note_generation_failed")
+        return "分析已完成，备注生成失败";
+      if (failureKind === "repair_execution_failed")
+        return "分析已完成，代码修改失败";
       return "流程失败";
     default:
       return "正在创建流程";
   }
 }
 
-export function getOpenHandsInvestigationStatusLabel(status: string | null | undefined): string {
+export function getOpenHandsInvestigationStatusLabel(
+  status: string | null | undefined,
+): string {
   switch (status) {
     case "finished":
       return "Agent 主动收口";
