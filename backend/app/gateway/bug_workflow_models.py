@@ -29,10 +29,52 @@ class SubmitClarificationRequest(BaseModel):
 class RollbackStatus(BaseModel):
     available: bool
     completed: bool = False
-    files: list[str] = []
+    files: list[str] = Field(default_factory=list)
     reason: str | None = None
     restorable: bool = False
     pending_action: Literal["rollback", "restore"] | None = None
+
+
+class GitDeliveryStatus(BaseModel):
+    status: Literal["conflict", "failed", "push_failed", "submitted"]
+    branch: str | None = None
+    remote: str | None = None
+    remote_branch: str | None = None
+    files: list[str] = []
+    commit: str | None = None
+    subject: str | None = None
+    report: str
+
+
+class RelayDeliveryStatus(BaseModel):
+    status: Literal["published", "withdrawn", "push_failed", "sync_failed", "failed"]
+    relay_remote: str | None = None
+    relay_url: str | None = None
+    relay_branch: str | None = None
+    test_commit: str | None = None
+    base_commit: str | None = None
+    company_remote: str | None = None
+    company_remote_url: str | None = None
+    company_branch: str | None = None
+    repository: Literal["sample_mobile_repo", "sample_platform_repo"] | None = None
+    files: list[str] = []
+    subject: str | None = None
+    report: str
+
+
+class LocalTestDeliveryStatus(BaseModel):
+    status: Literal["applied"]
+    repository_path: str
+    branch: str
+    relay_commit: str
+    base_commit: str
+    relay_branch: str
+    company_remote: str
+    company_remote_url: str
+    company_branch: str
+    files: list[str] = []
+    subject: str
+    report: str
 
 
 class BugWorkflowResponse(BaseModel):
@@ -142,6 +184,9 @@ class BugWorkflowResponse(BaseModel):
     repair_outcome: Literal["completed", "partial", "incomplete", "not_required"] | None = None
     repair_items: list[dict[str, Any]] = Field(default_factory=list)
     rollback: RollbackStatus | None = None
+    relay_delivery: RelayDeliveryStatus | None = None
+    local_test_delivery: LocalTestDeliveryStatus | None = None
+    git_delivery: GitDeliveryStatus | None = None
     note_thread_id: str | None = None
     note_run_id: str | None = None
     note_content: str | None = None

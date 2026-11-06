@@ -20,6 +20,7 @@ from app.gateway.auth_disabled import AUTH_SOURCE_INTERNAL
 from app.gateway.bug_attachment_evidence import collect_bug_attachment_evidence
 from app.gateway.bug_business_knowledge import matched_retrieval_aliases, recall_business_rules
 from app.gateway.bug_codex_summary import investigate_bug_with_codex
+from app.gateway.bug_git_delivery import BugGitDeliveryError, publish_bug_repair
 from app.gateway.bug_investigator import (
     InvestigationKnowledgeContext,
     build_investigation_knowledge_context,
@@ -579,23 +580,23 @@ def _public_bug_workflow_error(failure_kind: str, technical_error: str) -> str:
     if failure_kind == "platform_resolution_failed":
         return "复现端确认结果与禅道 module 冲突、证据不一致或格式无效；未启动源码调查"
     if failure_kind == "analysis_protocol_error":
-        return "Bug Workbench 返回的分析结果格式不符合要求；本次源码调查已保留，可直接恢复审核，无需重新调查"
+        return "example_user 返回的分析结果格式不符合要求；本次源码调查已保留，可直接恢复审核，无需重新调查"
     if failure_kind == "analysis_execution_failed":
-        return "Bug Workbench 主调查未能完成，请稍后重试"
+        return "example_user 主调查未能完成，请稍后重试"
     if failure_kind == "summary_execution_failed":
-        return "Bug Workbench 已保留源码调查证据，但最终中文结论未能生成；可直接恢复总结，无需重新调查"
+        return "example_user 已保留源码调查证据，但最终中文结论未能生成；可直接恢复总结，无需重新调查"
     if failure_kind == "post_analysis_interrupted":
-        return "Bug Workbench 已完成并保留源码调查，但分析后收口被服务中断；可直接恢复总结，无需重新调查"
+        return "example_user 已完成并保留源码调查，但分析后收口被服务中断；可直接恢复总结，无需重新调查"
     if failure_kind in {"review_preflight_failed", "review_execution_failed"}:
-        return "Bug Workbench 已保留主调查结果，但独立证据审核未能完成，可直接恢复审核"
+        return "example_user 已保留主调查结果，但独立证据审核未能完成，可直接恢复审核"
     if failure_kind == "note_generation_failed":
-        return "Bug Workbench 已完成并保留分析，但禅道备注未能生成；可直接重试备注，无需重新调查"
+        return "example_user 已完成并保留分析，但禅道备注未能生成；可直接重试备注，无需重新调查"
     if failure_kind == "note_write_failed":
-        return "Bug Workbench 已完成并保留分析及备注内容，但禅道写入或回读未确认；可直接重试写入，无需重新调查"
+        return "example_user 已完成并保留分析及备注内容，但禅道写入或回读未确认；可直接重试写入，无需重新调查"
     if failure_kind == "repair_execution_failed":
         return "分析和已确认备注仍保留，但按备注修改代码未能完成，请查看修改结果"
     logger.debug("Hidden Bug workflow technical error: %s", technical_error)
-    return "Bug Workbench 自动分析未能完成，请查看服务日志或稍后重试"
+    return "example_user 自动分析未能完成，请查看服务日志或稍后重试"
 
 
 def _clean_note_section(text: str) -> str:
@@ -1001,7 +1002,11 @@ def _codex_preparation_context(
     if selected_rules:
         packet["business_reference_only"] = {"semantics": "reference_only", "rules": selected_rules}
     if log_evidence.get("records"):
-        packet["runtime_observations"] = {"status": log_evidence.get("status"), "records": list(log_evidence.get("records") or [])}
+        packet["runtime_observations"] = {
+            "status": log_evidence.get("status"),
+            "evidence": list(log_evidence.get("evidence") or []),
+            "records": list(log_evidence.get("records") or []),
+        }
     return packet
 
 
@@ -1472,31 +1477,28 @@ async def run_bug_workflow(
         classified_ticket_signals = classify_ticket_runtime_signals(investigation_snapshot)
         log_expert_config = analysis_config.log_expert
         log_expert_model_name = log_expert_config.model_name
-        runtime_log_material: dict[str, Any] = {"status": "not_run", "files_searched": 0}
-        if triage.get("evidence_need") == "include_technical" and investigation_attachment_evidence:
-            runtime_log_index = source_view_root / PurePosixPath(source_roots[0]).name / LOG_CACHE_DIRECTORY / uuid.uuid4().hex / "logs.sqlite"
-            runtime_log_indices.append(runtime_log_index)
-            runtime_log_material = await asyncio.to_thread(
-                collect_log_material,
-                ensure_uploads_dir(analysis_thread_id, user_id=owner_user_id),
-                investigation_attachment_evidence,
-                index_path=runtime_log_index,
-            )
-        log_evidence: dict[str, Any] = {"status": "no_material", "model": log_expert_model_name, "model_call_count": 0, "token_usage": {}, "records": []}
-        if runtime_log_material.get("status") == "collected":
-            log_evidence = await run_log_expert(
-                bug_id=bug_id,
-                ticket=codex_ticket_snapshot,
-                index_path=runtime_log_index,
-                model_name=log_expert_model_name,
-                reasoning_effort=log_expert_config.reasoning_effort,
-                codex_bin=summary_config.codex_bin,
-            )
+        runtime_log_index = source_view_root / PurePosixPath(source_roots[0]).name / LOG_CACHE_DIRECTORY / uuid.uuid4().hex / "logs.sqlite"
+        runtime_log_indices.append(runtime_log_index)
+        runtime_log_material = await asyncio.to_thread(
+            collect_log_material,
+            ensure_uploads_dir(analysis_thread_id, user_id=owner_user_id),
+            investigation_attachment_evidence,
+            index_path=runtime_log_index,
+        )
+        log_evidence = await run_log_expert(
+            bug_id=bug_id,
+            ticket=codex_ticket_snapshot,
+            visual_evidence=compact_visual_evidence(investigation_attachment_evidence),
+            index_path=runtime_log_index,
+            model_name=log_expert_model_name,
+            reasoning_effort=log_expert_config.reasoning_effort,
+            codex_bin=summary_config.codex_bin,
+        )
         runtime_pre_scan = {
-            "collection_policy": "indexed_logs_luna_source_line_selection",
+            "collection_policy": "terra_ticket_visual_log_preparation",
             "ticket_device_identities": list(classified_ticket_signals.device_identities),
             "material": runtime_log_material,
-            "log_expert": {key: value for key, value in log_evidence.items() if key != "records"},
+            "log_expert": {key: value for key, value in log_evidence.items() if key in {"status", "model", "model_call_count", "token_usage", "source_retrieval"}},
             "runtime_navigation": {"status": "disabled", "reason": "runtime logs are observation context"},
         }
         source_evidence = await asyncio.to_thread(
@@ -1872,12 +1874,36 @@ async def run_bug_workflow(
                 changed_files = await commit
                 cancelled = True
             result = note_repair_result(repository, prepared["items"], changed_files)
-            details = dict(
+            relay_delivery = None
+            if changed_files and get_app_config().bug_analysis.git_relay.enabled:
+                try:
+                    relay_delivery = await asyncio.to_thread(
+                        publish_bug_repair,
+                        {
+                            **current_workflow,
+                            "workflow_id": workflow_id,
+                            "bug_id": bug_id,
+                            "rollback": snapshot,
+                        },
+                    )
+                except (BugGitDeliveryError, OSError, RuntimeError, ValueError) as exc:
+                    relay_delivery = {
+                        "status": "failed",
+                        "report": f"本地修改已保留，但未能发布到 example_user 中转仓库：{exc}",
+                    }
+            if isinstance(relay_delivery, dict) and relay_delivery.get("status") == "published":
+                relay_delivery = {**relay_delivery, "repository": repository}
+            completion_report = result["completion_report"]
+            if relay_delivery is not None:
+                completion_report = f"{completion_report}\n\n{relay_delivery['report']}"
+            details = {
                 **result,
-                changed_files=changed_files,
-                event_type="repair_completed",
-                summary=result["completion_report"],
-            )
+                "completion_report": completion_report,
+                "changed_files": changed_files,
+                "relay_delivery": relay_delivery,
+                "event_type": "repair_completed",
+                "summary": completion_report,
+            }
             if cancelled or await is_cancelled():
                 await runtime.transition("cancelled", guard_cancelled=False, **details)
                 raise asyncio.CancelledError

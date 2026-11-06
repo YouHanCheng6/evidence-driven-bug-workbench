@@ -129,8 +129,8 @@ async def main_async() -> int:
         help="Evaluate only this persisted Bug id; repeat for multiple ids.",
     )
     parser.add_argument("--output", type=Path, default=Path(".deer-flow/audits/tabby-historical-retrieval.json"))
-    parser.add_argument("--sample_mobile_repo", type=Path, default=Path("/home/example_user/projects/sample_mobile_repo"))
-    parser.add_argument("--sample-platform-repo", type=Path, default=Path("/home/example_user/sample_platform_repo"))
+    parser.add_argument("--sample_mobile_repo", type=Path, default=Path("/home/example_user/example_user-workspace/sample_mobile_repo"))
+    parser.add_argument("--sample-platform-repo", type=Path, default=Path("/home/example_user/example_user-workspace/sample_platform_repo"))
     parser.add_argument("--index-root", type=Path, default=Path(".deer-flow/tabby/composite-repositories"))
     args = parser.parse_args()
 
@@ -152,7 +152,6 @@ async def main_async() -> int:
         timeout_seconds=20.0,
         max_candidates=5,
         max_anchor_queries=8,
-        max_fallback_concepts=8,
         max_raw_candidates=32,
         max_query_chars=1600,
         max_snippet_chars=1800,

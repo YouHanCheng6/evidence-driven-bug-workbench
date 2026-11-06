@@ -4,10 +4,12 @@ import ast
 import importlib.util
 import io
 import json
+import subprocess
 import sys
 import tempfile
 import types
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -36,6 +38,21 @@ with patch.dict(
         "public_investigation", "backend/app/gateway/bug_codex_summary.py"
     )
 logs = load_module("public_logs", "backend/app/gateway/bug_log_query_runtime.py")
+history = load_module(
+    "public_history", "backend/app/gateway/bug_git_history_runtime.py"
+)
+attachment_stub = types.ModuleType("app.gateway.bug_attachment_evidence")
+attachment_stub._redact_text = lambda text: text
+with patch.dict(
+    sys.modules,
+    {
+        "app.gateway.bug_attachment_evidence": attachment_stub,
+        "app.gateway.bug_log_query_runtime": logs,
+    },
+):
+    preparation = load_module(
+        "public_preparation", "backend/app/gateway/bug_log_expert.py"
+    )
 
 
 def report(second, fourth):
@@ -205,31 +222,108 @@ class InvestigationContracts(unittest.TestCase):
             )
             self.assertEqual(next(logs.list_sources(path))["last_line"], 3)
 
-    def test_symbol_discovery_only_summarizes_actual_matching_names(self):
+    def test_paged_search_is_bounded_and_original_records_remain_complete(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "logs.sqlite"
             writer = logs.LogIndexWriter(path, redact=lambda text: text)
-            writer.add(
-                "synthetic.log",
-                1,
-                0,
-                '{"eventName":"RefreshFinished","otherField":"UnrelatedValue"}',
-            )
-            writer.add("synthetic.log", 2, 0, "eventName=RefreshFinished")
-            writer.add("synthetic.log", 3, 0, "a prose-only marker with no fields")
+            long_record = "matching event " + "x" * (logs.SEARCH_PREVIEW_CHARS + 100)
+            for number, raw in enumerate(
+                (long_record, "matching second", "matching third"), 1
+            ):
+                writer.add("synthetic.log", number, 0, raw)
+            writer.add("other.log", 1, 0, "matching elsewhere")
             writer.finish()
-            symbols = list(logs.discover_symbols(path, "refresh"))
-            self.assertEqual(
-                {(item["kind"], item["name"]) for item in symbols},
-                {("field", "eventName"), ("value", "RefreshFinished")},
+            meta, first = logs.search_page(
+                path, "matching", source="synthetic.log", limit=2
             )
-            self.assertTrue(all(item["record_count"] == 2 for item in symbols))
-            self.assertEqual(list(logs.discover_symbols(path, "prose-only")), [])
             self.assertEqual(
-                len(list(logs.search_records(path, "prose-only"))),
-                1,
-                "Empty symbol discovery does not establish absent records.",
+                (meta["total"], meta["returned"], meta["next_offset"]), (3, 2, 2)
             )
+            self.assertEqual([item["line"] for item in first], [1, 2])
+            self.assertTrue(first[0]["truncated"])
+            self.assertEqual(len(first[0]["preview"]), logs.SEARCH_PREVIEW_CHARS)
+            self.assertEqual(
+                logs.read_record(path, first[0]["source"], first[0]["line"])["raw"],
+                long_record,
+            )
+            meta, second = logs.search_page(
+                path, "matching", source="synthetic.log", offset=2, limit=2
+            )
+            self.assertEqual([item["line"] for item in second], [3])
+            self.assertIsNone(meta["next_offset"])
+            _, narrowed = logs.search_page(
+                path, "matching", source="synthetic.log", first=2, last=2
+            )
+            self.assertEqual([item["line"] for item in narrowed], [2])
+            for kwargs in (
+                {"offset": -1},
+                {"limit": 0},
+                {"limit": logs.MAX_SEARCH_LIMIT + 1},
+            ):
+                with self.assertRaises(ValueError):
+                    logs.search_page(path, "matching", **kwargs)
+            self.assertFalse(hasattr(logs, "discover_symbols"))
+
+    def test_missing_attachment_evidence_still_creates_a_valid_empty_index(self):
+        for evidence in (None, {}):
+            with (
+                self.subTest(evidence=evidence),
+                tempfile.TemporaryDirectory() as folder,
+            ):
+                root = Path(folder)
+                path = root / "logs.sqlite"
+                result = preparation.collect_log_material(
+                    root, evidence, index_path=path
+                )
+                self.assertEqual(result["status"], "no_material")
+                self.assertEqual(result["index_status"], "ready")
+                self.assertEqual(result["indexed_parts"], 0)
+                self.assertEqual(list(logs.list_sources(path)), [])
+                meta, records = logs.search_page(path, "fictional")
+                self.assertEqual(meta["total"], 0)
+                self.assertIsNone(meta["next_offset"])
+                self.assertEqual(records, [])
+
+    def test_history_caps_at_eight_and_keeps_dates_outside_truncated_patches(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            source, view = root / "source", root / "view"
+            for directory in (source, view):
+                directory.mkdir()
+                (directory / "example.py").write_text("example = True\n")
+            (source / ".git").mkdir()
+            date = "2026-01-01T12:00:00+00:00"
+            calls = []
+
+            def fake_git(repository, *args):
+                calls.append(args)
+                output = (
+                    "".join(
+                        f"{number:040x}\x1f{date}\x1fSynthetic fix {number}\x1e"
+                        for number in range(1, 9)
+                    )
+                    if args[0] == "log"
+                    else "long fictional patch text"
+                )
+                return subprocess.CompletedProcess(args, 0, stdout=output, stderr="")
+
+            output = io.StringIO()
+            with (
+                patch.object(history, "__file__", str(view / "history.py")),
+                patch.object(history, "_run_git", side_effect=fake_git),
+                patch.object(history, "MAX_PATCH_CHARS", 4),
+                patch.object(history, "MAX_TOTAL_PATCH_CHARS", 32),
+                redirect_stdout(output),
+            ):
+                self.assertEqual(history._query(str(source), "example.py", 100), 0)
+            self.assertIn("--max-count=8", calls[0])
+            result, metadata = output.getvalue().splitlines()
+            payload = json.loads(result.removeprefix(history.RESULT_PREFIX))
+            dates = json.loads(metadata.removeprefix(history.METADATA_PREFIX))
+            self.assertEqual(len(dates), 8)
+            self.assertTrue(all(item["patch_truncated"] for item in payload["commits"]))
+            self.assertTrue(all(item["committed_at"] == date for item in dates))
+            self.assertEqual(dates[-1]["subject"], "Synthetic fix 8")
 
     def test_index_redaction_discard_and_missing_parts_fail_closed(self):
         with tempfile.TemporaryDirectory() as folder:

@@ -880,6 +880,11 @@ async def delete_thread_data(thread_id: str, request: Request) -> ThreadDeleteRe
                 await checkpointer.adelete_thread(owned_thread_id)
             await event_store.delete_by_thread(owned_thread_id)
             await thread_store.delete(owned_thread_id, user_id=user_id)
+        from app.channels.service import get_channel_service
+
+        channel_service = get_channel_service()
+        if channel_service is not None:
+            channel_service.manager.forget_bug_workflow(thread_id)
         return ThreadDeleteResponse(
             success=True,
             message=f"Stopped and deleted Bug Workbench task {thread_id}",
@@ -1398,6 +1403,12 @@ async def delete_shared_feishu_conversation(thread_id: ThreadId, request: Reques
     except Exception:
         logger.exception("Failed to delete shared Feishu conversation %s", sanitize_log_param(thread_id))
         raise HTTPException(status_code=500, detail="Failed to delete shared Feishu conversation") from None
+    if _is_feishu_bug_workflow(record):
+        from app.channels.service import get_channel_service
+
+        channel_service = get_channel_service()
+        if channel_service is not None:
+            channel_service.manager.forget_bug_workflow(thread_id)
     return ThreadDeleteResponse(success=True, message=f"Deleted shared Feishu conversation {thread_id}")
 
 

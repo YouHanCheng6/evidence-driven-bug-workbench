@@ -9,7 +9,7 @@ import re
 import time
 from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -22,6 +22,11 @@ from app.channels import buzz_run_policy as _buzz_run_policy  # noqa: F401
 from app.channels import feishu_run_policy as _feishu_run_policy  # noqa: F401
 from app.channels.commands import KNOWN_CHANNEL_COMMANDS
 from app.channels.dedupe_store import InboundDedupeStore, MemoryInboundDedupeStore
+from app.channels.feishu_operation_intent import (
+    FeishuOperationIntent,
+    recognize_feishu_operation_intent,
+    should_recognize_feishu_operation_intent,
+)
 from app.channels.message_bus import (
     INBOUND_FILE_CONTENT_KEY,
     PENDING_CLARIFICATION_METADATA_KEY,
@@ -33,7 +38,6 @@ from app.channels.message_bus import (
 )
 from app.channels.run_policy import CHANNEL_RUN_POLICY, ChannelRunPolicy
 from app.channels.store import ChannelStore
-from app.gateway.bug_change_advice import render_change_advice
 from app.gateway.csrf_middleware import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, generate_csrf_token
 
 # Import built-in channel run-policy registrars eagerly so direct
@@ -80,37 +84,22 @@ MESSAGE_STREAM_EVENTS = ("messages-tuple", "messages")
 THREAD_BUSY_MESSAGE = "This conversation is already processing another request. Please wait for it to finish and try again."
 BOUND_IDENTITY_REQUIRED_MESSAGE = "Connect this channel from DeerFlow Settings, complete the in-channel connect step, then send your message again."
 BOUND_IDENTITY_UNAVAILABLE_MESSAGE = "Channel connection verification is temporarily unavailable. Please try again later or contact the DeerFlow operator."
-# Feishu Bug messages are dispatched before a general-purpose agent run.  The
-# patterns intentionally stay narrow: they recognise a ZenTao URL, an explicit
-# Bug/缺陷 reference, or a standalone numeric Bug id.  They must never spend a
-# model call merely to decide whether the Bug Workbench should handle a message.
+# Bug operations consume canonical command text produced by the dedicated
+# Feishu intent model, plus the internal numeric shortcut used by tools.
 _ZENTAO_BUG_URL_PATTERN = re.compile(r"(?:https?://[^\s]+)?/zentao/bug-view-(\d+)\.html", re.IGNORECASE)
 _EXPLICIT_BUG_ID_PATTERN = re.compile(r"(?:禅道\s*)?(?:bug|缺陷)\s*#?\s*(\d{1,10})\b", re.IGNORECASE)
 _STANDALONE_BUG_ID_PATTERN = re.compile(r"^\s*#?\s*(\d{4,10})\s*$")
-_BUG_CODE_ACTION_PATTERN = re.compile(
-    r"^(?:请帮我|帮我|请)?\s*(回退|撤销|恢复)\s*(?:禅道\s*)?(?:bug|缺陷)?\s*#?\s*(\d{1,10})"
-    r"(?:\s*的?\s*(?:本次)?\s*(?:代码)?(?:修改|改动))?\s*[。！!]*$",
+_EXPLICIT_BUG_ANALYSIS_PATTERN = re.compile(
+    r"^\s*(?:(?:请|麻烦)\s*(?:你)?\s*)?(?:(?:帮|给)\s*我\s*)?"
+    r"(?:分析|排查|调查|处理)(?:一下)?\s*[:：]?\s*"
+    r"(?:禅道\s*)?(?:bugs?|缺陷|工单)?\s*"
+    r"(?P<ids>#?\d{4,10}(?:\s*[,，、和及]\s*#?\d{4,10})*)\s*[。.!！]?\s*$",
     re.IGNORECASE,
 )
-_BUG_CODE_ACTION_SUFFIX_PATTERN = re.compile(
-    r"^(?:请帮我|帮我|请)?\s*(?:把|将)?\s*(?:禅道\s*)?(?:bug|缺陷)?\s*#?\s*(\d{1,10})"
-    r"\s*(?:的?\s*(?:本次)?\s*(?:代码)?(?:修改|改动))?\s*(回退|撤销|恢复)\s*[。！!]*$",
-    re.IGNORECASE,
-)
-_BUG_FOLLOWUP_PATTERN = re.compile(
-    r"^\s*(?:继续(?:分析|查|处理)?(?:这个(?:\s*(?:bug|缺陷))?)?|分析这个(?:\s*(?:bug|缺陷))?|查这个(?:\s*(?:bug|缺陷))?)\s*[。！？!?]*\s*$",
-    re.IGNORECASE,
-)
-_BUG_WORKFLOW_CANCEL_PATTERN = re.compile(
-    r"^\s*(?:取消|停止|终止)(?:当前)?(?:禅道)?\s*(?:bug|缺陷|分析|流程)?\s*[。！？!?]*\s*$|^\s*(?:编号写错了|写错编号|不是这个\s*(?:bug|缺陷)?|换个\s*(?:bug|缺陷))\s*[。！？!?]*\s*$",
-    re.IGNORECASE,
-)
-_BUG_CURRENT_SUMMARY_PATTERN = re.compile(
-    r"^\s*(?:请帮我|帮我|请)?\s*总结(?:一下)?\s*(?:当前|这个)\s*(?:bug|缺陷)\s*[。！？!?]*\s*$",
-    re.IGNORECASE,
-)
-_BUG_WORKBENCH_SNAPSHOT_METADATA_KEY = "_bug_workbench_summary_snapshot"
-_FEISHU_GREETING_PATTERN = re.compile(r"^\s*(?:你好|您好|嗨|哈喽|hello|hi)\s*[!！。,.，]*\s*$", re.IGNORECASE)
+_BUG_CODE_ACTION_PATTERN = re.compile(r"^(回退|恢复) #(\d{1,10})$")
+_BUG_CODE_SUBMIT_PATTERN = re.compile(r"^提交拉取并推送 #(\d{1,10})$")
+_BUG_CODE_FETCH_PATTERN = re.compile(r"^拉取 #(\d{1,10})$")
+_BUG_WORKFLOW_CANCEL_PATTERN = re.compile(r"^取消当前 Bug$")
 _FEISHU_LEADING_MENTION_PATTERN = re.compile(r"^\s*@[^\s@]+(?:\s+|$)")
 _BUG_WORKFLOW_ACTIVE_STATUSES = frozenset({"routing", "analyzing", "writing_note", "repairing"})
 _BUG_WORKFLOW_WAITING_STATUSES = frozenset({"awaiting_clarification"})
@@ -277,22 +266,12 @@ class _SerializedThreadRunState:
     waiters: int = 0
 
 
-def _is_bug_workbench_read_query(text: str) -> bool:
-    """Recognize natural read-only questions without requiring one magic phrase."""
-    if _BUG_CURRENT_SUMMARY_PATTERN.fullmatch(text):
-        return True
-    subject = re.search(r"(?:bug|缺陷|问题|工作台|分析|修复|备注|测试)", text, re.IGNORECASE)
-    intent = re.search(r"(?:状态|进度|结果|结论|查到|看到|更新|怎么样|如何|哪一步|为什么|是否|有没有|现在|当前)", text, re.IGNORECASE)
-    return bool(subject and intent)
-
-
-def _is_main_agent_bug_batch_request(text: str) -> bool:
-    """Leave list/selection/batch language with the lead agent, not one Bug."""
-    assignee_query = re.search(r"(?:名下|指派给|指派人|负责人)", text)
-    list_intent = re.search(r"(?:查|列|统计|多少|几个|前\s*\d+|全部|未解决)", text)
-    selected_batch = re.search(r"(?:这些|这批|刚才.{0,12}(?:列表|编号|查询|那些|这批)|上面.{0,12}(?:列表|编号|那些|这批)|(?:全部|所有).{0,12}(?:Bug|bug|缺陷|工单)|这\s*\d+\s*个)", text)
-    batch_action = re.search(r"(?:运行|分析|启动|进度|结果|完成)", text)
-    return bool((assignee_query and list_intent) or (selected_batch and batch_action))
+def _parse_explicit_bug_analysis_request(text: str) -> list[int] | None:
+    """Return ordered IDs only for an explicit request to start analysis."""
+    match = _EXPLICIT_BUG_ANALYSIS_PATTERN.fullmatch(text)
+    if match is None:
+        return None
+    return list(dict.fromkeys(int(value) for value in re.findall(r"\d{4,10}", match.group("ids"))))
 
 
 @dataclass(slots=True)
@@ -336,19 +315,27 @@ def _extract_zentao_bug_id(text: str) -> int | None:
     return None
 
 
-def _is_bug_workflow_followup(text: str) -> bool:
-    """Return whether a short Feishu reply asks to continue the active Bug flow."""
-    return bool(_BUG_FOLLOWUP_PATTERN.fullmatch(text))
-
-
 def _parse_bug_code_action(text: str) -> tuple[str, int] | None:
     match = _BUG_CODE_ACTION_PATTERN.fullmatch(text.strip())
     if match is not None:
         return ("restore" if match.group(1) == "恢复" else "rollback", int(match.group(2)))
-    match = _BUG_CODE_ACTION_SUFFIX_PATTERN.fullmatch(text.strip())
-    if match is not None:
-        return ("restore" if match.group(2) == "恢复" else "rollback", int(match.group(1)))
     return None
+
+
+def _parse_bug_code_submit(text: str) -> int | None:
+    match = _BUG_CODE_SUBMIT_PATTERN.fullmatch(text.strip())
+    return int(match.group(1)) if match is not None else None
+
+
+def _parse_bug_code_fetch(text: str) -> int | None:
+    match = _BUG_CODE_FETCH_PATTERN.fullmatch(text.strip())
+    return int(match.group(1)) if match is not None else None
+
+
+def _is_operator_local_git_sender(sender: str, feishu_config: Mapping[str, Any]) -> bool:
+    """Allow host Git actions only for the explicitly configured operator."""
+    allowed = feishu_config.get("bug_workbench_server_local_open_id")
+    return isinstance(allowed, str) and bool(allowed.strip()) and sender == allowed.strip()
 
 
 def _format_bug_attachment_evidence_notice(bug_id: int, evidence: Any) -> str | None:
@@ -508,7 +495,7 @@ def _format_feishu_bug_result(
 ) -> str:
     """Project the canonical persisted Bug result into one Feishu message."""
 
-    lines = [f"禅道 Bug #{bug_id}：Bug Workbench 已完成分析。"]
+    lines = [f"禅道 Bug #{bug_id}：example_user 已完成分析。"]
     platform = state.get("platform_resolution")
     if isinstance(platform, Mapping):
         client_labels = {"android": "Android", "ios": "iOS", "harmony": "Harmony"}
@@ -551,6 +538,9 @@ def _format_feishu_repair_terminal_result(
         lines = [f"禅道 Bug #{bug_id}：本次修改 0 个文件。"]
     if report and not item_report:
         lines.append(f"修复专家结论：{report[:1000]}")
+    relay = state.get("relay_delivery")
+    if isinstance(relay, Mapping) and str(relay.get("report") or "").strip():
+        lines.extend(["", str(relay["report"]).strip()])
     if state.get("note_verified") is True:
         note_status = "已有确认备注，本次未重复写入" if state.get("note_write_skipped") is True else "已写入并回读确认"
     else:
@@ -1096,74 +1086,7 @@ def _human_input_message(content: str, *, original_content: str | None = None, f
 
 
 def _channel_agent_input_text(msg: InboundMessage) -> str:
-    """Add deterministic, model-facing context for narrow channel interactions."""
-    text = msg.text or ""
-    bug_snapshot = msg.metadata.get(_BUG_WORKBENCH_SNAPSHOT_METADATA_KEY)
-    if msg.channel_name == "feishu" and isinstance(bug_snapshot, str) and bug_snapshot:
-        return f"{text}\n\n{bug_snapshot}"
-    return text
-
-
-def _format_bug_workbench_summary_snapshot(state: Mapping[str, Any]) -> str:
-    """Expose the latest canonical Bug Workbench state to the normal lead agent."""
-    lines = [
-        "<bug_workbench_snapshot>",
-        (
-            "以下是 Bug 工作台的最新只读状态，来自工作台持久化数据，不是禅道列表。"
-            "用户询问该 Bug、工作台状态、分析进展、修复或测试结果时必须优先依据这里回答，且只能依据这里回答；"
-            "不得调用禅道接口替代工作台状态，不得查询最新禅道 Bug，"
-            "不得重新猜测或重复源码定位；与当前问题无关时忽略。"
-        ),
-        f"Bug ID：{state.get('bug_id', '未知')}",
-        f"当前状态：{state.get('status', '未知')}",
-        f"状态版本：revision {state.get('revision', 0)}",
-    ]
-    if state.get("updated_at"):
-        lines.append(f"最后更新：{state['updated_at']}")
-    if state.get("status") == "awaiting_repair_choice":
-        lines.append("历史状态说明：这是旧版只读任务，不能继续选择、补证或启动修复；如需处理请重新提交 Bug ID。")
-    bug_snapshot = state.get("bug_snapshot")
-    if isinstance(bug_snapshot, Mapping):
-        for key, label in (("title", "标题"), ("steps", "测试步骤"), ("actual", "实测结果"), ("expected", "预期结果")):
-            value = bug_snapshot.get(key)
-            if isinstance(value, str) and value.strip():
-                lines.append(f"{label}：{value.strip()[:1200]}")
-    # Same canonical report as Workbench; no prefix cut losing advice.
-    report = str(state.get("analysis_report") or state.get("handoff") or "").strip()
-    if report:
-        lines.extend(("完整分析与修改/处理意见：", report))
-    elif state.get("final_targets"):
-        lines.extend(("修改/处理意见：", render_change_advice(state["final_targets"])))
-    labels = (
-        ("route", "专项类型", 80),
-        ("route_reason", "分流原因", 300),
-        ("repair_decision", "代码执行状态（report_only仅表示未执行，不代表不能本地修改）", 80),
-        ("decision_reason", "分析阶段判断原因", 500),
-        ("note_content", "禅道备注", 4000),
-        ("repair_report", "按备注修改结果", 800),
-        ("completion_report", "完成说明", 500),
-        ("error", "错误", 300),
-    )
-    for key, label, limit in labels:
-        value = state.get(key)
-        if isinstance(value, str) and value.strip():
-            lines.append(f"{label}：{value.strip()[:limit]}")
-    changed_files = state.get("changed_files")
-    if isinstance(changed_files, list) and changed_files:
-        lines.append(f"实际修改 {len(changed_files)} 个文件：" + "、".join(str(item) for item in changed_files))
-    last_event = state.get("last_event")
-    if isinstance(last_event, Mapping):
-        lines.append(f"最近操作：revision {last_event.get('revision', '?')} / {last_event.get('actor_source', '未知来源')} / {last_event.get('event_type', 'state_updated')} / {last_event.get('summary') or '无摘要'}")
-    events = state.get("events")
-    if isinstance(events, list):
-        latest_human_event = next(
-            (event for event in reversed(events) if isinstance(event, Mapping) and event.get("actor_source") in {"workbench", "feishu", "main_agent"}),
-            None,
-        )
-        if latest_human_event is not None and latest_human_event.get("revision") != (last_event.get("revision") if isinstance(last_event, Mapping) else None):
-            lines.append(f"最近人工操作：revision {latest_human_event.get('revision', '?')} / {latest_human_event.get('actor_source')} / {latest_human_event.get('summary') or latest_human_event.get('event_type', 'state_updated')}")
-    lines.append("</bug_workbench_snapshot>")
-    return "\n".join(lines)
+    return msg.text or ""
 
 
 def _strip_leading_feishu_mention(text: str) -> str:
@@ -2229,12 +2152,30 @@ class ChannelManager:
 
     async def _handle_message(self, msg: InboundMessage) -> None:
         msg = _apply_effective_owner(msg)
+        is_bug_workbench_assistant = False
+        feishu_operation_intent = FeishuOperationIntent()
         # Team assistant uses one operator-owned account across Feishu surfaces.
-        if msg.channel_name == "feishu" and self._bug_workbench_owner_user_id:
+        if msg.channel_name == "feishu":
             _, _, assistant_context = self._resolve_run_params(msg, "")
-            if assistant_context.get("agent_name") == "personal-assistant":
+            is_bug_workbench_assistant = assistant_context.get("agent_name") == "personal-assistant"
+            if is_bug_workbench_assistant and self._bug_workbench_owner_user_id:
                 msg.owner_user_id = self._bug_workbench_owner_user_id
         try:
+            shortcut_text = _strip_leading_feishu_mention((msg.text or "").strip())
+            if is_bug_workbench_assistant and msg.msg_type != InboundMessageType.COMMAND and should_recognize_feishu_operation_intent(shortcut_text):
+                feishu_operation_intent = await recognize_feishu_operation_intent(
+                    shortcut_text,
+                    user_id=msg.owner_user_id,
+                    thread_id=msg.thread_ts or msg.chat_id,
+                )
+                if feishu_operation_intent.missing_bug_id_action is not None:
+                    action = feishu_operation_intent.missing_bug_id_action
+                    await self._publish_bug_workflow_message(
+                        msg,
+                        f"请提供 Bug 编号，例如：{action} #实际BugID。",
+                    )
+                    return
+
             # Non-command chat can be rejected before it consumes a semaphore
             # slot. Commands are handled below because provider adapters consume
             # binding commands before manager dispatch, and _handle_command()
@@ -2250,15 +2191,19 @@ class ChannelManager:
                 if msg.msg_type == InboundMessageType.COMMAND:
                     await self._handle_command(msg)
                 else:
-                    # Numeric shortcut is terminal; natural-language Bug requests
-                    # belong to the main assistant. Preserve pending clarification.
-                    shortcut_text = _strip_leading_feishu_mention((msg.text or "").strip())
-                    explicit_bug = _extract_zentao_bug_id(shortcut_text)
-                    natural_bug_request = explicit_bug is not None and not shortcut_text.isdecimal()
-                    batch_request = _is_main_agent_bug_batch_request(shortcut_text)
-                    code_action = _parse_bug_code_action(shortcut_text)
-                    if (code_action is not None or (not natural_bug_request and not batch_request)) and await self._try_dispatch_feishu_bug_workflow(msg):
+                    if is_bug_workbench_assistant and await self._try_dispatch_feishu_video_choice(msg):
                         return
+                    if is_bug_workbench_assistant:
+                        if feishu_operation_intent.command is not None:
+                            await self._dispatch_feishu_operation(msg, feishu_operation_intent.command)
+                            return
+                        explicit_bug_ids = _parse_explicit_bug_analysis_request(shortcut_text)
+                        if explicit_bug_ids is not None:
+                            await self._start_explicit_bug_batch(msg, explicit_bug_ids)
+                            return
+                        if _STANDALONE_BUG_ID_PATTERN.fullmatch(shortcut_text) or _ZENTAO_BUG_URL_PATTERN.search(shortcut_text):
+                            if await self._try_dispatch_feishu_bug_workflow(msg):
+                                return
                     await self._handle_chat(msg, bound_identity_checked=True)
         except InvalidChannelSessionConfigError as exc:
             logger.warning(
@@ -2302,13 +2247,13 @@ class ChannelManager:
         # dependency and cannot collide with normal Feishu IDs.
         return "\x1f".join(key)
 
-    async def _publish_bug_workflow_message(self, msg: InboundMessage, text: str) -> None:
+    async def _publish_bug_workflow_message(self, msg: InboundMessage, text: str, *, thread_id: str = "") -> None:
         """Reply directly to Feishu without creating a normal agent run."""
         await self.bus.publish_outbound(
             OutboundMessage(
                 channel_name=msg.channel_name,
                 chat_id=msg.chat_id,
-                thread_id="",
+                thread_id=thread_id,
                 text=text,
                 thread_ts=msg.thread_ts,
                 connection_id=msg.connection_id,
@@ -2316,6 +2261,30 @@ class ChannelManager:
                 metadata=_slim_metadata(msg.metadata),
             )
         )
+
+    async def _start_explicit_bug_batch(self, msg: InboundMessage, bug_ids: list[int]) -> None:
+        """Start the existing explicit Bug-analysis path without a control command."""
+        from app.gateway.main_agent_bug_batch import start_explicit_bug_batch_from_channel
+
+        client = self._get_client()
+        thread_id, created = await self._get_or_create_thread(client, msg)
+        if not created:
+            await self._update_thread_channel_metadata(client, msg, thread_id)
+
+        user_id = _channel_storage_user_id(msg)
+        owner = self._bug_workbench_owner_user_id or _effective_owner_user_id(msg)
+        if not user_id or not owner:
+            raise RuntimeError("Bug 批次缺少可验证的会话所有者")
+        dedupe_key = self._inbound_dedupe_key(msg)
+        request_id = "\x1f".join(dedupe_key) if dedupe_key is not None else f"{msg.channel_name}\x1f{msg.chat_id}\x1f{msg.topic_id or ''}\x1f{msg.created_at:.9f}\x1f{id(msg)}"
+        confirmation = await start_explicit_bug_batch_from_channel(
+            thread_id=thread_id,
+            user_id=user_id,
+            owner=owner,
+            bug_ids=bug_ids,
+            request_id=request_id,
+        )
+        await self._publish_bug_workflow_message(msg, confirmation, thread_id=thread_id)
 
     async def publish_bug_workflow_external_action(self, workflow: Mapping[str, Any]) -> None:
         """Notify and resume watching when Workbench advances a Feishu-bound task."""
@@ -2332,10 +2301,13 @@ class ChannelManager:
         bug_id = int(workflow.get("bug_id") or 0)
         event_type = str(event.get("event_type") or "state_updated")
         summaries = {
-            "repair_started": "Bug 工作台已自动开始修复，Bug Workbench 正在执行。",
+            "repair_started": "Bug 工作台已自动开始修复，example_user 正在执行。",
             "repair_accepted": "已在工作台确认验收，本次修复已完成。",
             "repair_rolled_back": "已在工作台回退本次代码修改。",
             "repair_restored": "已在工作台恢复本次代码修改。",
+            "local_test_applied": "已在工作台把本次修改写入个人本地代码库，保持未提交。",
+            "git_submitted": "已在工作台提交、拉取并推送本次代码修改。",
+            "git_submission_stopped": "工作台已停止本次代码提交，请查看具体原因。",
             "workflow_cancelled": "已在工作台取消当前任务。",
         }
         action_text = summaries.get(event_type)
@@ -2351,7 +2323,17 @@ class ChannelManager:
             owner_user_id=str(workflow.get("channel_owner_user_id") or self._bug_workbench_owner_user_id or "") or None,
             text="",
         )
-        text = str(workflow.get("completion_report") or "") if event_type in {"repair_rolled_back", "repair_restored"} else ""
+        delivery = workflow.get("git_delivery") if isinstance(workflow.get("git_delivery"), Mapping) else {}
+        local_delivery = workflow.get("local_test_delivery") if isinstance(workflow.get("local_test_delivery"), Mapping) else {}
+        text = (
+            str(delivery.get("report") or "")
+            if event_type in {"git_submitted", "git_submission_stopped"}
+            else str(local_delivery.get("report") or "")
+            if event_type == "local_test_applied"
+            else str(workflow.get("completion_report") or "")
+            if event_type in {"repair_rolled_back", "repair_restored"}
+            else ""
+        )
         await self._publish_bug_workflow_message(message, text or f"禅道 Bug #{bug_id}：{action_text}")
         key = (channel_name, connection_id, chat_id, topic_id)
         conversation = self._bug_workflow_conversations.get(key)
@@ -2366,6 +2348,12 @@ class ChannelManager:
         conversation.last_notified_status = conversation.status
         if conversation.status in _BUG_WORKFLOW_ACTIVE_STATUSES:
             self._watch_bug_workflow(message, key)
+
+    def forget_bug_workflow(self, workflow_id: str) -> None:
+        """Remove every Feishu conversation association for a deleted Bug task."""
+        keys = [key for key, conversation in self._bug_workflow_conversations.items() if conversation.workflow_id == workflow_id]
+        for key in keys:
+            self._bug_workflow_conversations.pop(key, None)
 
     async def _start_bug_workflow(
         self,
@@ -2414,21 +2402,66 @@ class ChannelManager:
             return {"started": False, "completion_notification": False, "message": "工作台未创建任务，请依据当前会话的错误通知处理。"}
         return {"workflow_id": conversation.workflow_id, "bug_id": conversation.bug_id, "status": conversation.status, "completion_notification": True}
 
-    async def _attach_latest_bug_workflow_snapshot(
-        self,
-        msg: InboundMessage,
-        workflow: _BugWorkflowConversation,
-    ) -> bool:
-        """Attach fresh canonical state for the lead agent on any natural-language turn."""
-        try:
-            state = await self._get_bug_workflow(msg, workflow.workflow_id)
-        except Exception:
-            logger.exception("[Manager] failed to attach Bug workflow snapshot: workflow=%s", workflow.workflow_id)
+    async def _try_dispatch_feishu_video_choice(self, msg: InboundMessage) -> bool:
+        """Keep the established A/B video choice on its direct workflow path."""
+        answer = _strip_leading_feishu_mention((msg.text or "").strip())
+        choice_match = re.fullmatch(r"([A-Da-d])[。.!！]?", answer)
+        if msg.channel_name != "feishu" or choice_match is None:
             return False
-        workflow.status = str(state.get("status") or workflow.status)
-        msg.metadata = dict(msg.metadata)
-        msg.metadata[_BUG_WORKBENCH_SNAPSHOT_METADATA_KEY] = _format_bug_workbench_summary_snapshot(state)
+
+        conversation_key = self._bug_workflow_conversation_key(msg)
+        existing = self._bug_workflow_conversations.get(conversation_key)
+        if existing is None:
+            try:
+                persisted = await self._get_active_bug_workflow(msg, conversation_key)
+            except Exception:
+                logger.warning("[Manager] failed to recover video clarification", exc_info=True)
+                return False
+            if persisted is None or str(persisted.get("status")) != "awaiting_clarification":
+                return False
+            existing = _BugWorkflowConversation(
+                workflow_id=persisted["id"],
+                bug_id=int(persisted["bug_id"]),
+                status="awaiting_clarification",
+            )
+            self._bug_workflow_conversations[conversation_key] = existing
+        if existing.status != "awaiting_clarification":
+            return False
+
+        try:
+            state = await self._get_bug_workflow(msg, existing.workflow_id)
+            if str(state.get("clarification_type") or "") != "video" or state.get("clarification_stage") != "pre_analysis":
+                return False
+            clarification = state.get("clarification")
+            options = [item for item in clarification.get("options", []) if isinstance(item, Mapping)] if isinstance(clarification, Mapping) else []
+            option_index = ord(choice_match.group(1).upper()) - ord("A")
+            if option_index >= len(options) or not isinstance(options[option_index].get("id"), str):
+                return False
+            payload = await self._submit_bug_workflow_clarification(
+                msg,
+                existing.workflow_id,
+                answer="",
+                option_id=str(options[option_index]["id"]),
+            )
+        except Exception:
+            logger.exception("[Manager] failed to submit video clarification: workflow=%s", existing.workflow_id)
+            await self._publish_bug_workflow_message(msg, f"禅道 Bug #{existing.bug_id} 的视频选择提交失败，请稍后重试。")
+            return True
+
+        existing.status = str(payload.get("status", "analyzing"))
+        self._watch_bug_workflow(msg, conversation_key)
+        await self._publish_bug_workflow_message(
+            msg,
+            f"已记录禅道 Bug #{existing.bug_id} 的视频分析选择，example_user 将按该选择继续处理附件和源码调查。",
+        )
         return True
+
+    async def _dispatch_feishu_operation(self, msg: InboundMessage, command: str) -> None:
+        """Execute one canonical command produced by the dedicated intent model."""
+        command_msg = replace(msg, text=command, metadata=dict(msg.metadata))
+        handled = await self._try_dispatch_feishu_bug_workflow(command_msg)
+        if not handled:
+            raise RuntimeError(f"模型输出的飞书操作未被现有执行逻辑处理：{command}")
 
     async def _get_active_bug_workflow(
         self,
@@ -2449,28 +2482,6 @@ class ChannelManager:
             return None
         if not isinstance(payload, dict) or not isinstance(payload.get("id"), str):
             raise RuntimeError("Bug Workbench returned an invalid active workflow response")
-        return payload
-
-    async def _get_latest_bug_workflow(
-        self,
-        msg: InboundMessage,
-        conversation_key: tuple[str, str, str, str] | None,
-    ) -> dict[str, Any] | None:
-        """Read the newest chat-bound task, or the owner's latest Workbench task."""
-        headers = self._bug_workflow_headers(msg)
-        params = {"channel_key": self._serialize_bug_workflow_conversation_key(conversation_key)} if conversation_key is not None else None
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.get(
-                f"{self._gateway_url}/api/bug-workflows/latest",
-                params=params,
-                headers=headers,
-            )
-        response.raise_for_status()
-        payload = response.json()
-        if payload is None:
-            return None
-        if not isinstance(payload, dict) or not isinstance(payload.get("id"), str):
-            raise RuntimeError("Bug Workbench returned an invalid latest workflow response")
         return payload
 
     async def _submit_bug_workflow_clarification(
@@ -2600,9 +2611,9 @@ class ChannelManager:
                         specialist_analysis = _format_feishu_specialist_analysis(str(state.get("analysis_report") or state.get("handoff") or ""))
                         analysis_text = f"\n\n分析结论：\n{specialist_analysis}" if specialist_analysis else ""
                         notice = (
-                            f"禅道 Bug #{workflow.bug_id}：Bug Workbench 已完成分析，已有确认写入的禅道备注，本次未重复写入，现在已自动进入修复，无需再选择是否开始。{analysis_text}"
+                            f"禅道 Bug #{workflow.bug_id}：example_user 已完成分析，已有确认写入的禅道备注，本次未重复写入，现在已自动进入修复，无需再选择是否开始。{analysis_text}"
                             if state.get("note_write_skipped") is True
-                            else f"禅道 Bug #{workflow.bug_id}：Bug Workbench 已完成分析并写入禅道备注，现在已自动进入修复，无需再选择是否开始。{analysis_text}"
+                            else f"禅道 Bug #{workflow.bug_id}：example_user 已完成分析并写入禅道备注，现在已自动进入修复，无需再选择是否开始。{analysis_text}"
                         )
                         await self._publish_bug_workflow_message(
                             msg,
@@ -2646,9 +2657,9 @@ class ChannelManager:
                         specialist_analysis = _format_feishu_specialist_analysis(str(state.get("analysis_report") or state.get("handoff") or ""))
                         analysis_text = f"\n\n分析结论：\n{specialist_analysis}" if specialist_analysis else ""
                         notice = (
-                            f"禅道 Bug #{workflow.bug_id}：Bug Workbench 已完成分析，已有确认写入的禅道备注，本次未重复写入。{analysis_text}"
+                            f"禅道 Bug #{workflow.bug_id}：example_user 已完成分析，已有确认写入的禅道备注，本次未重复写入。{analysis_text}"
                             if state.get("note_write_skipped") is True
-                            else f"禅道 Bug #{workflow.bug_id}：Bug Workbench 已完成分析并写入禅道备注。{analysis_text}"
+                            else f"禅道 Bug #{workflow.bug_id}：example_user 已完成分析并写入禅道备注。{analysis_text}"
                         )
                         await self._publish_bug_workflow_message(
                             msg,
@@ -2661,7 +2672,7 @@ class ChannelManager:
                     repair_label = "OpenHands 修复" if state.get("repair_engine") == "openhands" else "修复"
                     await self._publish_bug_workflow_message(
                         msg,
-                        f"禅道 Bug #{workflow.bug_id} 已由 Bug Workbench {repair_label}完成代码修改，等待你验收。{suffix}",
+                        f"禅道 Bug #{workflow.bug_id} 已由 example_user {repair_label}完成代码修改，等待你验收。{suffix}",
                     )
                 elif status == "accepted":
                     await self._publish_bug_workflow_message(msg, f"禅道 Bug #{workflow.bug_id} 已记录验收完成。")
@@ -2716,7 +2727,7 @@ class ChannelManager:
         task.add_done_callback(discard)
 
     async def _try_dispatch_feishu_bug_workflow(self, msg: InboundMessage) -> bool:
-        """Route only clear Feishu Bug requests around the normal main agent."""
+        """Execute canonical Feishu Bug commands or the established Bug launcher."""
         if msg.channel_name != "feishu":
             return False
 
@@ -2725,6 +2736,52 @@ class ChannelManager:
             text = _strip_leading_feishu_mention(text)
         if not text and not msg.files:
             return False
+        fetch_bug_id = _parse_bug_code_fetch(text)
+        submit_bug_id = _parse_bug_code_submit(text)
+        if fetch_bug_id is not None or submit_bug_id is not None:
+            # This edition has no device queue. The empty-default identity is
+            # authorization only; removing a remote path must not open host Git
+            # to every sender who can use the shared assistant.
+            from deerflow.config import get_app_config
+
+            feishu_config = (getattr(get_app_config(), "channels", {}) or {}).get("feishu", {})
+            if not _is_operator_local_git_sender(msg.user_id, feishu_config):
+                await self._publish_bug_workflow_message(msg, "本机代码交付仅允许显式配置的操作员使用；本次未执行拉取、提交或推送。")
+                return True
+        if fetch_bug_id is not None:
+            try:
+                headers = self._bug_workflow_headers(msg)
+                headers["X-DeerFlow-Bug-Action-Source"] = "feishu"
+                async with httpx.AsyncClient(timeout=180.0) as client:
+                    response = await client.post(f"{self._gateway_url}/api/bug-workflows/by-bug/{fetch_bug_id}/fetch", headers=headers)
+                payload = response.json()
+                if response.is_error:
+                    await self._publish_bug_workflow_message(msg, f"Bug #{fetch_bug_id}：{payload.get('detail', '拉取未完成')}")
+                    return True
+                delivery = payload.get("local_test_delivery")
+                report = delivery.get("report") if isinstance(delivery, dict) else None
+                await self._publish_bug_workflow_message(msg, str(report or f"Bug #{fetch_bug_id}：本地拉取状态无法确认"))
+            except (httpx.HTTPError, ValueError, KeyError):
+                logger.exception("[Manager] Bug local fetch failed: bug=%s", fetch_bug_id)
+                await self._publish_bug_workflow_message(msg, f"Bug #{fetch_bug_id}：暂时无法确认本地拉取结果，请稍后重复发送同一命令。")
+            return True
+        if submit_bug_id is not None:
+            try:
+                headers = self._bug_workflow_headers(msg)
+                headers["X-DeerFlow-Bug-Action-Source"] = "feishu"
+                async with httpx.AsyncClient(timeout=180.0) as client:
+                    response = await client.post(f"{self._gateway_url}/api/bug-workflows/by-bug/{submit_bug_id}/submit", headers=headers)
+                payload = response.json()
+                if response.is_error:
+                    await self._publish_bug_workflow_message(msg, f"Bug #{submit_bug_id}：{payload.get('detail', '提交未完成')}")
+                    return True
+                delivery = payload.get("git_delivery")
+                report = delivery.get("report") if isinstance(delivery, dict) else None
+                await self._publish_bug_workflow_message(msg, str(report or f"Bug #{submit_bug_id}：提交状态无法确认"))
+            except (httpx.HTTPError, ValueError, KeyError):
+                logger.exception("[Manager] Bug Git delivery failed: bug=%s", submit_bug_id)
+                await self._publish_bug_workflow_message(msg, f"Bug #{submit_bug_id}：暂时无法确认提交结果，请稍后重复发送同一命令。")
+            return True
         code_action = _parse_bug_code_action(text)
         if code_action is not None:
             action, identifier = code_action
@@ -2747,10 +2804,6 @@ class ChannelManager:
                 logger.exception("[Manager] Bug code change action failed: bug=%s action=%s", identifier, action)
                 await self._publish_bug_workflow_message(msg, f"Bug #{identifier}：暂时无法确认代码操作结果。可重复发送同一命令读取或完成本次操作。")
             return True
-        if re.search(r"回退|撤销|恢复", text) and _extract_zentao_bug_id(text) is not None:
-            # Other phrasing belongs to the main assistant's explicit action
-            # tool, never the numeric shortcut that starts another analysis.
-            return False
         conversation_key = self._bug_workflow_conversation_key(msg)
         existing = self._bug_workflow_conversations.get(conversation_key)
         bug_id = _extract_zentao_bug_id(text)
@@ -2758,7 +2811,7 @@ class ChannelManager:
         # The in-memory mapping makes a hot process fast, but it cannot be the
         # source of truth: a Feishu follow-up may arrive after Gateway restart.
         # Recover before routing normal conversation text to the lead agent.
-        if existing is None and bug_id is None and not _FEISHU_GREETING_PATTERN.fullmatch(text):
+        if existing is None and bug_id is None:
             try:
                 persisted = await self._get_active_bug_workflow(msg, conversation_key)
             except Exception:
@@ -2772,35 +2825,6 @@ class ChannelManager:
                 )
                 self._bug_workflow_conversations[conversation_key] = existing
 
-        if existing is None and bug_id is None and _is_bug_workbench_read_query(text):
-            persisted = None
-            latest_lookup_failed = False
-            for lookup_key in (conversation_key, None):
-                try:
-                    persisted = await self._get_latest_bug_workflow(msg, lookup_key)
-                except Exception:
-                    latest_lookup_failed = True
-                    logger.warning(
-                        "[Manager] failed to recover latest Bug workflow: scope=%s",
-                        "chat" if lookup_key is not None else "owner",
-                        exc_info=True,
-                    )
-                if persisted is not None:
-                    break
-            if persisted is not None:
-                existing = _BugWorkflowConversation(
-                    workflow_id=persisted["id"],
-                    bug_id=int(persisted["bug_id"]),
-                    status=str(persisted.get("status", "note_written")),
-                )
-                self._bug_workflow_conversations[conversation_key] = existing
-            else:
-                await self._publish_bug_workflow_message(
-                    msg,
-                    ("暂时无法读取 Bug 工作台状态，请稍后重试。" if latest_lookup_failed else "当前用户没有可读取的 Bug 工作台任务。请先在工作台启动一个 Bug，或发送 Bug ID 创建任务。"),
-                )
-                return True
-
         if existing is not None and existing.status in (_BUG_WORKFLOW_ACTIVE_STATUSES | _BUG_WORKFLOW_WAITING_STATUSES) and _is_bug_workflow_cancellation(text):
             try:
                 await self._cancel_bug_workflow(msg, existing.workflow_id)
@@ -2813,6 +2837,10 @@ class ChannelManager:
                 msg,
                 f"已停止禅道 Bug #{existing.bug_id} 的当前分析；本地工作流与正在运行的 Codex 调查均已中断，排队工作不会继续。",
             )
+            return True
+
+        if existing is None and _is_bug_workflow_cancellation(text):
+            await self._publish_bug_workflow_message(msg, "当前会话没有正在处理的禅道 Bug。")
             return True
 
         if existing is not None and existing.status in _BUG_WORKFLOW_WAITING_STATUSES:
@@ -2829,67 +2857,7 @@ class ChannelManager:
                 )
                 return True
 
-        if existing is not None and existing.status == "awaiting_clarification" and bug_id is None:
-            answer = text.strip()
-            try:
-                state = await self._get_bug_workflow(msg, existing.workflow_id)
-                clarification_type = str(state.get("clarification_type") or "")
-                if clarification_type != "video" or state.get("clarification_stage") != "pre_analysis":
-                    self._bug_workflow_conversations.pop(conversation_key, None)
-                    await self._publish_bug_workflow_message(
-                        msg,
-                        f"禅道 Bug #{existing.bug_id} 是旧版只读任务，已不再支持补充技术证据后继续调查。请重新发送该 Bug ID 创建当前流程。",
-                    )
-                    return True
-                option_id: str | None = None
-                clarification = state.get("clarification")
-                if isinstance(clarification, Mapping) and str(clarification.get("response_mode") or "") == "choice":
-                    options = [item for item in clarification.get("options", []) if isinstance(item, Mapping)]
-                    choice_match = re.fullmatch(r"\s*([A-Da-d])[。.!！]?\s*", answer)
-                    if choice_match:
-                        option_index = ord(choice_match.group(1).upper()) - ord("A")
-                        if option_index < len(options) and isinstance(options[option_index].get("id"), str):
-                            option_id = str(options[option_index]["id"])
-                            answer = ""
-                if (not answer and option_id is None) or _is_bug_workflow_followup(answer):
-                    await self._publish_bug_workflow_message(msg, "请直接回复上一个问题的选择。")
-                    return True
-                submit_kwargs: dict[str, Any] = {"answer": answer}
-                if option_id is not None:
-                    submit_kwargs["option_id"] = option_id
-                payload = await self._submit_bug_workflow_clarification(msg, existing.workflow_id, **submit_kwargs)
-            except Exception:
-                logger.exception("[Manager] failed to submit Bug workflow clarification: workflow=%s", existing.workflow_id)
-                await self._publish_bug_workflow_message(msg, f"禅道 Bug #{existing.bug_id} 的需求确认提交失败，请稍后重试。")
-                return True
-            existing.status = str(payload.get("status", "analyzing"))
-            self._watch_bug_workflow(msg, conversation_key)
-            await self._publish_bug_workflow_message(
-                msg,
-                f"已记录禅道 Bug #{existing.bug_id} 的视频分析选择，Bug Workbench 将按该选择继续处理附件和源码调查。",
-            )
-            return True
-
-        if bug_id is None and _is_bug_workflow_followup(text):
-            if existing is None:
-                await self._publish_bug_workflow_message(msg, "当前会话没有可继续的禅道 Bug。请发送 Bug ID 或禅道 Bug 链接。")
-                return True
-            if existing.status in _BUG_WORKFLOW_ACTIVE_STATUSES:
-                await self._publish_bug_workflow_message(msg, f"禅道 Bug #{existing.bug_id} 正由 Bug Workbench 分析，完成后会在此回复并写入禅道备注。")
-                return True
-            bug_id = existing.bug_id
-
         if bug_id is None:
-            # An unfinished Bug Workbench run owns its Feishu conversation.
-            # Ordinary text cannot escape into the lead agent mid-workflow.
-            if existing is not None and existing.status in _BUG_WORKFLOW_ACTIVE_STATUSES:
-                await self._publish_bug_workflow_message(
-                    msg,
-                    f"禅道 Bug #{existing.bug_id} 正由 Bug Workbench 处理，完成当前工作流后会在此回复。",
-                )
-                return True
-            if existing is not None:
-                await self._attach_latest_bug_workflow_snapshot(msg, existing)
             return False
 
         if existing is not None and existing.bug_id == bug_id and existing.status in _BUG_WORKFLOW_ACTIVE_STATUSES:
@@ -2898,19 +2866,19 @@ class ChannelManager:
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code != 404:
                     logger.warning("[Manager] failed to verify cached Bug workflow %s", existing.workflow_id, exc_info=True)
-                    await self._publish_bug_workflow_message(msg, f"禅道 Bug #{bug_id} 正由 Bug Workbench 分析，完成后会在此回复并写入禅道备注。")
+                    await self._publish_bug_workflow_message(msg, f"禅道 Bug #{bug_id} 正由 example_user 分析，完成后会在此回复并写入禅道备注。")
                     return True
                 self._bug_workflow_conversations.pop(conversation_key, None)
                 existing = None
             except Exception:
                 logger.warning("[Manager] failed to verify cached Bug workflow %s", existing.workflow_id, exc_info=True)
-                await self._publish_bug_workflow_message(msg, f"禅道 Bug #{bug_id} 正由 Bug Workbench 分析，完成后会在此回复并写入禅道备注。")
+                await self._publish_bug_workflow_message(msg, f"禅道 Bug #{bug_id} 正由 example_user 分析，完成后会在此回复并写入禅道备注。")
                 return True
             else:
                 current_status = str(current.get("status") or existing.status)
                 existing.status = current_status
                 if current_status in _BUG_WORKFLOW_ACTIVE_STATUSES:
-                    await self._publish_bug_workflow_message(msg, f"禅道 Bug #{bug_id} 正由 Bug Workbench 分析，完成后会在此回复并写入禅道备注。")
+                    await self._publish_bug_workflow_message(msg, f"禅道 Bug #{bug_id} 正由 example_user 分析，完成后会在此回复并写入禅道备注。")
                     return True
                 if current_status in _BUG_WORKFLOW_TERMINAL_STATUSES:
                     self._bug_workflow_conversations.pop(conversation_key, None)
@@ -2919,7 +2887,7 @@ class ChannelManager:
         if existing is not None and existing.status in _BUG_WORKFLOW_ACTIVE_STATUSES:
             await self._publish_bug_workflow_message(
                 msg,
-                f"禅道 Bug #{existing.bug_id} 正由 Bug Workbench 处理，完成当前工作流后会在此回复。",
+                f"禅道 Bug #{existing.bug_id} 正由 example_user 处理，完成当前工作流后会在此回复。",
             )
             return True
 
@@ -2939,7 +2907,7 @@ class ChannelManager:
         await self._publish_bug_workflow_message(
             msg,
             (
-                f"Bug Workbench 已开始处理禅道 Bug #{bug_id}：正在读取禅道正文，并在存在图片或附件时按类型下载和提取事实。"
+                f"example_user 已开始处理禅道 Bug #{bug_id}：正在读取禅道正文，并在存在图片或附件时按类型下载和提取事实。"
                 "事实整理后会先说明初步问题方向；文案问题将在源码调查前确认修改目标和排除项，其他问题直接进入源码调查。"
                 "最终将呈现四部分分析结论和修改／处理意见；禅道备注回读确认后，按配置自动执行本次明确的本地修改，并反馈实际修改文件数和文件名。"
             ),

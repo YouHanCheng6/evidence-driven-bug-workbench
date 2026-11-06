@@ -15,6 +15,16 @@ and complete repository-qualified paths. `core/bugs/workbench.ts` owns timeline
 and rollback/restore selection; API actions update the selected snapshot without
 a new investigation or model call. Conflicts preserve current files. Historical
 real diffs remain readable, but legacy engines cannot be restarted.
+The 2026-11-06 evidence panel shows the persisted preparation query and exact
+original anchors, not a frontend-generated query. The operator-local delivery
+panel projects isolated-index relay publication, explicit fetch as uncommitted
+changes, and explicitly approved submit/rebase/push of the original repair file
+set's complete current contents. These are deterministic backend actions, not
+extra model permissions; report actual conflicts and push failures verbatim.
+The public configuration disables repair/relay and contains no real Git remote.
+No coworker executor, pairing UI, remote job queue or dedicated remote-delivery
+endpoint belongs in this showcase. Feishu operator authorization is enforced by
+the backend, not by hiding a button. End-to-end delivery and tests are unverified.
 Sample repository identifiers and author labels are fictional. Consult
 `../docs/personal/SOURCE_MAP.md`; there are no real tickets, source mirrors or
 production UI screenshots here. End-to-end runtime compatibility is unverified.

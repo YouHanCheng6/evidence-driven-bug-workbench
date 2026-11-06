@@ -86,6 +86,9 @@ class BugWorkflowState(TypedDict, total=False):
     patch_executor_token_usage: dict[str, int]
     changed_files: list[str]
     rollback: dict[str, Any]
+    relay_delivery: dict[str, Any]
+    local_test_delivery: dict[str, Any]
+    git_delivery: dict[str, Any]
     awaiting_clarification: bool
     clarification: dict[str, Any]
     clarification_type: str

@@ -29,140 +29,17 @@ from websockets.exceptions import WebSocketException
 from app.gateway.bug_runtime_source_policy import discover_tracked_runtime_dist_roots, path_is_in_runtime_dist
 
 _IGNORED_PARTS = frozenset({".git", ".gradle", ".next", "build", "dist", "node_modules", "out", "target", "vendor"})
-_GENERIC_TERMS = frozenset(
-    {
-        "android",
-        "ios",
-        "bug",
-        "app",
-        "页面",
-        "异常",
-        "错误",
-        "问题",
-        "失败",
-        "显示",
-        "测试",
-        "预期结果",
-        "实际结果",
-        "测试步骤",
-        "手机型号与系统",
-    }
-)
-_IDENTIFIER = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z_][A-Za-z0-9_]{3,}(?![A-Za-z0-9_])")
-_API_PATH = re.compile(r"(?<![A-Za-z0-9_])/(?:[A-Za-z0-9_~.-]+/)+[A-Za-z0-9_~.-]+")
-_ABSOLUTE_URL = re.compile(r"https?://[^\s<>()\[\]{}]+", re.IGNORECASE)
-_DOCUMENT_LINK_PATH = re.compile(r"^/(?:wiki|docx?|docs?|sheets?|base|drive|file|pages?)(?:/|$)", re.IGNORECASE)
 _REGEX_META = re.compile(r"([\\.^$|?*+()\[\]{}])")
-_NOISY_IDENTIFIER = re.compile(r"^(?:APP|L)[_-]?\d+$", re.IGNORECASE)
-_GENERIC_IDENTIFIERS = frozenset(
-    {
-        "data_type",
-        "iPhone",
-        "keyId",
-        "keyObj",
-        "Logger_I",
-        "example_plugin",
-        "PageIndex",
-        "params",
-        "SERIAL",
-        "uuid",
-    }
-)
-_HAN_RUN = re.compile(r"[\u3400-\u9fff]{2,}")
-_ASCII_CONCEPT = re.compile(r"(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9.+-]{2,15}(?![A-Za-z0-9_])")
-_FACT_LABEL = re.compile(
-    r"(?:手机型号与系统|测试设备(?:sn)?|测试时间|预置条件|操作步骤|测试步骤|步骤|"
-    r"实际结果|实测结果|预期结果|重现概率|问题恢复方法|恢复方法)",
-    re.IGNORECASE,
-)
-_CONCEPT_BREAK = re.compile(
-    r"(?:过程中|页面|点击|长按|查看|观察|打开|进入|返回|应该|应当|需要|相关|出现|"
-    r"一直|仍在|进行|成功|失败|详情请见|附件视频|是否|然后|以后|以及|并且|但是|的|下)",
-)
-_CONCEPT_STOPWORDS = _GENERIC_TERMS | frozenset(
-    {
-        "手机",
-        "型号",
-        "系统",
-        "设备",
-        "详情",
-        "结果",
-        "操作",
-        "步骤",
-        "概率",
-        "附件",
-        "视频",
-        "截图",
-        "日志",
-        "修改",
-        "说明",
-        "如下",
-        "整个",
-        "系列",
-        "版本",
-        "环境",
-        "实际",
-        "预期",
-        "恢复",
-        "问题恢复",
-        "测试时间",
-        "测试设备",
-        "release",
-        "debug",
-        "log",
-        "redmi",
-        "xiaomi",
-    }
-)
 _PRODUCT_TOKEN = re.compile(r"(?<![A-Za-z0-9])(?:[A-Za-z]\d{2,}[A-Za-z]?|\d{3}[A-Za-z]?)(?:-\d+)?(?![A-Za-z0-9])")
 _EXPLICIT_PATH_PRODUCT = re.compile(
     r"(?:(?:modules/config/|exampleModuleConfig_)(?P<token>[A-Za-z]?\d{2,}[A-Za-z]?)|"
     r"projects/com\.example\.(?P<project>[A-Za-z0-9_-]+))",
     re.IGNORECASE,
 )
-_SOURCE_SUFFIXES = frozenset({".java", ".kt", ".m", ".mm", ".swift", ".js", ".jsx", ".ts", ".tsx"})
+_SOURCE_SUFFIXES = frozenset({".java", ".kt", ".m", ".mm", ".swift", ".js", ".jsx", ".ts", ".tsx", ".ets"})
 _RESOURCE_SUFFIXES = frozenset({".strings", ".xml", ".json"})
 _RESOURCE_PATH_PARTS = frozenset({"assets", "images", "lang", "langs", "locales", "resources", "res"})
 _IMPLEMENTATION_LAYERS = frozenset({"android_native", "ios_native", "shared_rn", "harmony_native", "sample_platform_repo"})
-
-# Small, repository-independent translations from user-visible behavior to
-# common source responsibilities.  These are programming concepts, not product
-# or Bug mappings; the ticket facts remain the source of the business nouns.
-_CODE_DUTY_HINTS = (
-    (("海外", "美国", "地区", "国家"), "Sea overseas country region"),
-    (("注册",), "register signup"),
-    (("编辑",), "edit editing selected"),
-    (("日期",), "date header section"),
-    (("门铃",), "doorbell ring event"),
-    (("标签", "文案", "不一致"), "label title description mapping resource"),
-    (("钥匙",), "key keyId key management"),
-    (("密码",), "password pwd"),
-    (("长按",), "long press onLongPress gesture disabled"),
-    (("置灰", "灰色", "不可用"), "disabled enabled interaction state"),
-    (("批量",), "batch selected list"),
-    (("删除",), "delete remove callback"),
-    (("取消",), "cancel abort cleanup reset"),
-    (("断网", "无网络", "网络异常"), "network error failure callback"),
-    (("无提示", "提示", "toast"), "toast error message callback"),
-    (("进入", "打开"), "page entry initialize load fetch"),
-    (("计时", "时长"), "timer duration format hour minute second"),
-    (("崩溃", "闪退"), "lifecycle cleanup callback crash"),
-)
-_CODE_ACTION_WORDS = {
-    "删除": ("delete", "remove"),
-    "取消": ("cancel", "reset"),
-    "开锁": ("unlock",),
-    "下载": ("download",),
-    "录屏": ("record",),
-}
-_CODE_ENTITY_WORDS = {
-    "钥匙": ("key",),
-    "密码": ("pwd", "password"),
-    "按钮": ("button",),
-    "视频": ("video",),
-    "任务": ("task",),
-    "设备": ("device",),
-}
 
 
 def _revision(root: Path) -> str:
@@ -197,24 +74,6 @@ def _iter_text(value: Any):
             yield from _iter_text(item)
 
 
-def _iter_api_paths(value: Any):
-    for text in _iter_text(value):
-        seen: set[str] = set()
-        # Keep a real request path even when the ticket writes its absolute URL,
-        # while excluding common document/navigation links from source anchors.
-        for url_match in _ABSOLUTE_URL.finditer(text):
-            url = url_match.group(0).rstrip(".,;:，。；")
-            endpoint = urlsplit(url).path.rstrip("/")
-            if endpoint and len(endpoint) <= 80 and _API_PATH.fullmatch(endpoint) and not _DOCUMENT_LINK_PATH.match(endpoint):
-                seen.add(endpoint)
-                yield endpoint
-        without_urls = _ABSOLUTE_URL.sub(" ", text)
-        for match in _API_PATH.finditer(without_urls):
-            endpoint = match.group(0).rstrip(".,;:")
-            if len(endpoint) <= 80 and endpoint not in seen:
-                yield endpoint
-
-
 def _without_runtime_identities(value: Any, identifiers: Sequence[str]) -> Any:
     """Project the upstream identity classification into a source-only view."""
     if not identifiers:
@@ -247,408 +106,39 @@ def build_retrieval_query(
     max_chars: int,
     retrieval_aliases: Sequence[str] = (),
 ) -> str:
-    """Build one deterministic, fact-only natural-language retrieval query."""
-    ranked: list[tuple[int, str]] = []
-
-    def add(score: int, value: Any) -> None:
-        for raw in _iter_text(value):
-            text = raw.strip(" \t\r\n，。；：、|[]【】")
-            if len(text) < 3 or text.casefold() in _GENERIC_TERMS:
-                continue
-            if len(text) > 240:
-                text = text[:240]
-            if not any(existing == text for _existing_score, existing in ranked):
-                ranked.append((score, text))
-
-    # ``query_facts`` is the only interpreted view of the flattened ZenTao
-    # body.  Do not re-read description/steps/actual/expected here: doing so
-    # reintroduces the same template prose with conflicting roles after the
-    # preparation layer has already separated it.
-    add(160, list(_iter_api_paths(bug_snapshot.get("title"))))
-    for key in (
-        "actual_texts",
-        "expected_texts",
-        "resource_keys",
-        "event_ids",
-        "pages_or_regions",
-        "user_paths",
-        "visible_controls",
-        "event_or_actions",
-    ):
-        add(160, list(_iter_api_paths(query_facts.get(key))))
-    add(140, retrieval_aliases)
-    # The ticket states the behavior being investigated. Keep that semantic
-    # center ahead of visual scene descriptions, which usually describe where
-    # something was seen rather than the code path that produced the failure.
-    add(135, bug_snapshot.get("title"))
-    for key, score in (
-        ("actual_texts", 125),
-        ("expected_texts", 125),
-        ("entry_actions", 110),
-        ("resource_keys", 110),
-        ("event_ids", 110),
-        ("ticket_texts", 95),
-    ):
-        add(score, list(_iter_text(query_facts.get(key)))[:4])
-    for key in ("pages_or_regions", "user_paths", "visible_controls", "event_or_actions"):
-        add(55, list(_iter_text(query_facts.get(key)))[:2])
-
-    parts: list[str] = []
-    used = 0
-    for _score, text in sorted(ranked, key=lambda item: (-item[0], len(item[1]), item[1])):
-        cost = len(text) + (1 if parts else 0)
-        if used + cost > max_chars:
-            continue
-        parts.append(text)
-        used += cost
-    return "\n".join(parts)
-
-
-def build_code_duty_query(
-    *,
-    bug_snapshot: Mapping[str, Any],
-    query_facts: Mapping[str, Any],
-    max_chars: int = 640,
-) -> str:
-    """Build a compact behavior-to-source query alongside the literal query.
-
-    The literal query preserves exact copy, identifiers and ticket wording.
-    This second view keeps only page/action/state/expectation facts and adds a
-    bounded set of generic programming concepts.  It never names a product
-    file, class, module or Bug-specific destination.
-    """
-    duty_triggers = tuple(trigger for triggers, _hint in _CODE_DUTY_HINTS for trigger in triggers)
-    action_triggers = ("点击", "长按", "进入", "打开", "返回", "选择", "开启", "关闭", "添加", "删除", "取消", "播放", "录制", "开锁")
-
-    def fragments(value: Any) -> list[str]:
-        candidates: list[str] = []
-        for raw in _iter_text(value):
-            cleaned = _FACT_LABEL.sub("|", re.sub(r"\s+", " ", raw))
-            for fragment in re.split(r"[|\[\]【】；;。\n]|(?:^|\s)\d+[.、)）]", cleaned):
-                text = fragment.strip(" \t\r\n，。；：、|[]【】")
-                if 2 <= len(text) <= 80 and text not in candidates and not re.fullmatch(r"(?:必现|偶现|问题恢复|复现概率|时间|见视频|预置条件|无)", text) and not re.fullmatch(r"[\d\s:：./-]+", text):
-                    candidates.append(text)
-        return sorted(
-            dict.fromkeys(candidates),
-            key=lambda text: (
-                -int(any(trigger in text for trigger in duty_triggers)),
-                -int(any(trigger in text for trigger in action_triggers)),
-                -int(bool(re.search(r"(?:页|界面|列表|按钮|管理|设置|功能)", text))),
-                len(text),
-                text,
-            ),
-        )
-
-    parts: list[str] = []
-    seen: set[str] = set()
-    used = 0
-
-    def add(value: Any, *, limit: int) -> None:
-        nonlocal used
-        added = 0
-        for text in fragments(value):
-            folded = text.casefold()
-            if len(text) < 2 or folded in seen or folded in _GENERIC_TERMS or _NOISY_IDENTIFIER.fullmatch(text):
-                continue
-            cost = len(text) + (1 if parts else 0)
-            if used + cost > max_chars:
-                continue
-            parts.append(text)
-            seen.add(folded)
-            used += cost
-            added += 1
-            if added >= limit:
-                break
-
-    add(bug_snapshot.get("title"), limit=1)
-    add(query_facts.get("pages_or_regions"), limit=1)
-    add(query_facts.get("entry_actions") or query_facts.get("event_or_actions"), limit=1)
-    hint_corpus = "\n".join(
-        _iter_text(
-            (
-                query_facts.get("entry_actions"),
-                query_facts.get("actual_texts"),
-                query_facts.get("expected_texts"),
-                bug_snapshot.get("title"),
-            )
-        )
-    )
-    hint_corpus = re.sub(r"(?:见|查看)?(?:附件)?(?:视频|截图)", " ", hint_corpus)
-    hints = [hint for triggers, hint in _CODE_DUTY_HINTS if any(trigger.casefold() in hint_corpus.casefold() for trigger in triggers)]
-    composed = [
-        f"{verb}{entity[:1].upper()}{entity[1:]}" for action, verbs in _CODE_ACTION_WORDS.items() if action in hint_corpus for noun, entities in _CODE_ENTITY_WORDS.items() if noun in hint_corpus for verb in verbs for entity in entities
-    ][:8]
-    if composed:
-        add(composed, limit=8)
-    if hints:
-        add(hints, limit=5)
-    return "\n".join(parts)
-
-
-def _code_duty_anchor_terms(*, bug_snapshot: Mapping[str, Any], query_facts: Mapping[str, Any]) -> list[str]:
-    """Translate visible behavior into bounded, repository-independent code terms."""
-    corpus = "\n".join(
-        _iter_text(
-            (
-                bug_snapshot.get("title"),
-                query_facts.get("pages_or_regions"),
-                query_facts.get("entry_actions"),
-                query_facts.get("actual_texts"),
-                query_facts.get("expected_texts"),
-            )
-        )
-    ).casefold()
-    terms: list[str] = []
-    for triggers, hint in _CODE_DUTY_HINTS:
-        if not any(trigger.casefold() in corpus for trigger in triggers):
-            continue
-        for term in hint.split():
-            if len(term) >= 3 and term.casefold() not in {value.casefold() for value in terms}:
-                terms.append(term)
-    return terms[:12]
+    """Return the preparation model's source query without rewriting it."""
+    del bug_snapshot, query_facts, retrieval_aliases
+    log_evidence = runtime_evidence.get("log_evidence")
+    plan = log_evidence.get("source_retrieval") if isinstance(log_evidence, Mapping) else None
+    query = plan.get("query") if isinstance(plan, Mapping) else None
+    return query.strip()[:max_chars] if isinstance(query, str) else ""
 
 
 def build_retrieval_anchors(
     *,
-    query: str,
-    query_facts: Mapping[str, Any],
+    runtime_evidence: Mapping[str, Any],
     max_anchors: int,
-    retrieval_aliases: Sequence[str] = (),
 ) -> list[str]:
-    """Choose bounded exact anchors for Tabby's repository grep.
-
-    Complete visible/action facts precede supporting identifiers. Long
-    reproduction paragraphs are never sent as a grep expression.
-    """
+    """Return the preparation model's exact anchors without generating terms."""
+    log_evidence = runtime_evidence.get("log_evidence")
+    plan = log_evidence.get("source_retrieval") if isinstance(log_evidence, Mapping) else None
+    values = plan.get("anchors") if isinstance(plan, Mapping) else None
+    if not isinstance(values, Sequence) or isinstance(values, (bytes, bytearray, str)):
+        return []
     anchors: list[str] = []
-
-    def add(value: str) -> None:
-        candidate = re.sub(r"\s+", " ", value).strip(" \t\r\n，。；：、|[]【】`'\"")
-        if len(candidate) < 3 or len(candidate) > 80 or candidate.casefold() in _GENERIC_TERMS or _NOISY_IDENTIFIER.fullmatch(candidate) or candidate in _GENERIC_IDENTIFIERS or candidate in anchors:
-            return
-        anchors.append(candidate)
-
-    # Reuse preparation fields that already distinguish ticket-led actions
-    # from visual scene descriptions. This changes priority inside the existing
-    # bounded grep plan; it does not add another retrieval stage.
-    prioritized_facts = (
-        ("entry_actions", 3),
-        ("ticket_texts", 2),
-        ("actual_texts", 3),
-        ("expected_texts", 2),
-        ("user_paths", 2),
-    )
-    for key, limit in prioritized_facts:
-        for text in list(_iter_text(query_facts.get(key)))[:limit]:
-            add(text)
-            if len(anchors) >= max_anchors:
-                return anchors[:max_anchors]
-    for key in ("resource_keys", "event_ids"):
-        for text in _iter_text(query_facts.get(key)):
-            for identifier in _IDENTIFIER.findall(text):
-                if "_" in identifier or any(char.isupper() for char in identifier[1:]):
-                    add(identifier)
-            add(text)
-    for endpoint in _iter_api_paths(query):
-        add(endpoint)
-    for alias in retrieval_aliases:
-        add(alias)
-    # Identifiers remain useful, but they are supporting navigation. Keep
-    # complete action/copy facts ahead of serials and incidental code-shaped
-    # words so those identifiers cannot evict the behavior being investigated.
-    for key, limit in prioritized_facts:
-        for text in list(_iter_text(query_facts.get(key)))[:limit]:
-            for identifier in _IDENTIFIER.findall(text):
-                if len(identifier) >= 6 and ("_" in identifier or any(char.isupper() for char in identifier[1:])):
-                    add(identifier)
-                    if len(anchors) >= max_anchors:
-                        return anchors[:max_anchors]
-    for line in query.splitlines():
-        for identifier in _IDENTIFIER.findall(line):
-            if "_" in identifier and len(identifier) >= 8:
-                add(identifier)
-        if len(line) <= 48:
-            add(line)
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        anchor = value.strip()
+        folded = anchor.casefold()
+        if not anchor or len(anchor) > 240 or folded in seen:
+            continue
+        anchors.append(anchor)
+        seen.add(folded)
         if len(anchors) >= max_anchors:
             break
     return anchors[:max_anchors]
-
-
-def _normalized_anchor(value: Any) -> str:
-    return re.sub(r"\s+", " ", str(value or "")).strip(" \t\r\n，。；：、|[]【】`'\"")
-
-
-def _is_complete_literal_anchor(value: str) -> bool:
-    """Distinguish a visible/action fact from a generic code-shaped token."""
-    han_count = len(re.findall(r"[\u3400-\u9fff]", value))
-    return han_count >= 4 or (len(value) >= 12 and bool(re.search(r"[\s，。；：,:;!?！？]", value)))
-
-
-def _is_specific_source_identifier(value: str) -> bool:
-    """Keep generic English words usable without treating them as exact facts."""
-    if _API_PATH.fullmatch(value):
-        return True
-    if "_" in value or re.search(r"[a-z][A-Z]", value):
-        return True
-    return bool(value.isascii() and re.fullmatch(r"[A-Za-z][A-Za-z0-9.-]+", value) and len(value) >= 10)
-
-
-def _ticket_anchor_stage(anchor: str, query_facts: Mapping[str, Any]) -> str:
-    normalized = _normalized_anchor(anchor)
-    complete_facts = {
-        _normalized_anchor(value) for key in ("entry_actions", "ticket_texts", "actual_texts", "expected_texts", "user_paths") for value in _iter_text(query_facts.get(key)) if _is_complete_literal_anchor(_normalized_anchor(value))
-    }
-    if normalized in complete_facts or _is_complete_literal_anchor(normalized):
-        return "exact_ticket"
-    if _is_specific_source_identifier(normalized):
-        return "exact_identifier"
-    return "exact_supporting"
-
-
-def build_fallback_concepts(
-    *,
-    bug_snapshot: Mapping[str, Any],
-    query_facts: Mapping[str, Any],
-    runtime_evidence: Mapping[str, Any],
-    exact_anchors: Sequence[str],
-    max_concepts: int,
-) -> list[str]:
-    """Extract bounded short concepts when exact-anchor grep returns nothing.
-
-    This is deliberately deterministic and ticket-led. Runtime logs do not
-    contribute source-navigation terms.
-    """
-    fragments: list[tuple[int, str]] = []
-    seen_fragments: set[str] = set()
-
-    def add(weight: int, value: Any) -> None:
-        for raw in _iter_text(value):
-            text = re.sub(r"\s+", " ", raw).strip()
-            if len(text) < 2 or text in seen_fragments:
-                continue
-            seen_fragments.add(text)
-            fragments.append((weight, text))
-
-    add(160, list(_iter_text(query_facts.get("entry_actions")))[:5])
-    for key in ("actual_texts", "expected_texts", "resource_keys", "event_ids"):
-        add(135, query_facts.get(key))
-    add(105, query_facts.get("user_paths"))
-    for key in ("pages_or_regions", "visible_controls"):
-        add(55, query_facts.get(key))
-    add(145, bug_snapshot.get("title"))
-    add(80, query_facts.get("ticket_texts"))
-    # Screenshot-derived paths often repeat the same sentence at increasing
-    # nesting depths. Remove only the repeated span from lower-priority copies;
-    # preserve their unique suffix/prefix so screenshot-only facts are not lost.
-    compacted: list[tuple[int, str]] = []
-    for fragment in sorted(fragments, key=lambda item: (-item[0], len(item[1]), item[1])):
-        weight, text = fragment
-        remainder = text
-        for existing in compacted:
-            if len(existing[1]) >= 6 and existing[1] in remainder:
-                remainder = remainder.replace(existing[1], " ")
-        remainder = re.sub(r"(?:\s*[→>|]+\s*)+", " ", remainder)
-        remainder = re.sub(r"\s+", " ", remainder).strip()
-        if len(remainder) < 2:
-            continue
-        compacted.append((weight, remainder))
-    fragments = compacted
-
-    exact = {str(value).casefold() for value in exact_anchors}
-    scores: dict[str, float] = {}
-    document_hits: dict[str, set[int]] = {}
-    whole_hits: dict[str, set[int]] = {}
-
-    def record(concept: str, *, weight: int, fragment_index: int, whole: bool = False) -> None:
-        candidate = concept.strip(" -_.，。；：、|[]【】()（）`'\"")
-        folded = candidate.casefold()
-        if (
-            len(candidate) < 2
-            or len(candidate) > 16
-            or (candidate.isascii() and any(char.isdigit() for char in candidate))
-            or folded in exact
-            or folded in _CONCEPT_STOPWORDS
-            or _NOISY_IDENTIFIER.fullmatch(candidate)
-            or candidate in _GENERIC_IDENTIFIERS
-        ):
-            return
-        hits = document_hits.setdefault(candidate, set())
-        if fragment_index in hits:
-            return
-        hits.add(fragment_index)
-        if whole:
-            whole_hits.setdefault(candidate, set()).add(fragment_index)
-        contribution = weight + min(len(candidate), 8) * 3 + (90 if whole else 0)
-        scores[candidate] = max(scores.get(candidate, 0.0), contribution)
-
-    for fragment_index, (weight, raw) in enumerate(fragments):
-        text = _ABSOLUTE_URL.sub(" ", _FACT_LABEL.sub(" ", raw))
-        for token in _ASCII_CONCEPT.findall(text):
-            record(token, weight=weight, fragment_index=fragment_index, whole=True)
-        for run in _HAN_RUN.findall(text):
-            pieces = [piece for piece in _CONCEPT_BREAK.split(run) if len(piece) >= 2]
-            for piece in pieces:
-                if len(piece) <= 12:
-                    record(piece, weight=weight, fragment_index=fragment_index, whole=True)
-                # Repeated character n-grams recover concise Chinese concepts
-                # without maintaining product- or Bug-specific dictionaries.
-                for size in range(min(4, len(piece)), 1, -1):
-                    for offset in range(0, len(piece) - size + 1):
-                        record(
-                            piece[offset : offset + size],
-                            weight=min(weight, 35),
-                            fragment_index=fragment_index,
-                        )
-
-    ranked: list[tuple[float, str]] = []
-    complete_concepts = {concept for concept in scores if whole_hits.get(concept)}
-    for concept, score in scores.items():
-        hit_count = len(document_hits.get(concept, ()))
-        is_whole = bool(whole_hits.get(concept))
-        # A generated sliding fragment must never outrank the complete concept
-        # it came from. This removes malformed partial anchors generically,
-        # without maintaining Bug- or phrase-specific blacklists.
-        if not is_whole and any(concept in complete and concept != complete for complete in complete_concepts):
-            continue
-        # Two-character substrings are too noisy; genuine short ticket terms
-        # such as 配网/直播 remain eligible when they are a complete fragment.
-        if len(concept) == 2 and hit_count < 2 and not is_whole:
-            continue
-        specificity = min(len(concept), 8) * 16
-        if len(concept) == 2:
-            specificity -= 90
-        if not is_whole:
-            specificity -= 70
-        ranked.append((score + min(hit_count, 3) * 30 + specificity, concept))
-    ranked.sort(key=lambda item: (-item[0], -len(item[1]), item[1]))
-
-    selected: list[str] = []
-    cluster_counts: dict[str, int] = {}
-    for _score, concept in ranked:
-        cluster = next((item for item in selected if concept in item or item in concept), "")
-        if cluster:
-            key = min(cluster, concept, key=len)
-            count = cluster_counts.get(key, 1)
-            if count >= 2 or abs(len(cluster) - len(concept)) <= 1:
-                continue
-            cluster_counts[key] = count + 1
-        selected.append(concept)
-        if len(selected) >= max(1, max_concepts):
-            break
-    explicit_products: list[str] = []
-    for text in _iter_text(bug_snapshot.get("product")):
-        for token in _PRODUCT_TOKEN.findall(text):
-            normalized = token.casefold().split("-", 1)[0]
-            if normalized not in explicit_products:
-                explicit_products.append(normalized)
-    for product in explicit_products:
-        if product in exact or product in selected:
-            continue
-        if len(selected) >= max(1, max_concepts):
-            selected[-1] = product
-        else:
-            selected.append(product)
-    return selected
 
 
 def build_product_scope_tokens(bug_snapshot: Mapping[str, Any], *, retrieval_aliases: Sequence[str] = ()) -> list[str]:
@@ -1684,14 +1174,8 @@ def _retrieval_evidence_strength(item: Mapping[str, Any]) -> int:
     stages = [str(value) for value in raw_stages] if isinstance(raw_stages, Sequence) and not isinstance(raw_stages, (str, bytes, bytearray)) else []
     stages.append(str(item.get("retrieval_stage") or "unknown"))
     strengths = {
-        "exact_ticket": 5,
-        "exact_identifier": 4,
-        "tabby_hybrid": 3,
-        "concept_expansion": 2,
-        "exact_supporting": 2,
-        "exact_anchor": 2,
-        "exact_code_duty": 1,
-        "tabby_code_duty": 1,
+        "exact_preparation": 3,
+        "tabby_hybrid": 4,
     }
     return max((strengths.get(stage, 2) for stage in stages), default=2)
 
@@ -1703,71 +1187,6 @@ def _candidate_sort_key(item: Mapping[str, Any]) -> tuple[int, float, str]:
         -float(item.get("score") or 0.0),
         str(item.get("filepath") or item.get("path") or ""),
     )
-
-
-def _allocate_anchor_queries(*, groups: Sequence[Sequence[str]], limit: int) -> list[str]:
-    """Share the exact-query budget across ticket, navigation and structure.
-
-    A flat concatenation allowed the first group to consume the whole budget.
-    Round-robin allocation keeps every available evidence class represented
-    without assigning fixed slots to any product or Bug.
-    """
-    selected: list[str] = []
-    seen: set[str] = set()
-    remaining = [list(dict.fromkeys(str(value).strip() for value in group if str(value).strip())) for group in groups if group]
-    while len(selected) < limit and any(remaining):
-        progressed = False
-        for group in remaining:
-            while group:
-                value = group.pop(0)
-                folded = value.casefold()
-                if folded in seen:
-                    continue
-                seen.add(folded)
-                selected.append(value)
-                progressed = True
-                break
-            if len(selected) >= limit:
-                break
-        if not progressed:
-            break
-    return selected
-
-
-def _allocate_source_anchor_queries(
-    *,
-    ticket_anchors: Sequence[str],
-    duty_anchors: Sequence[str],
-    query_facts: Mapping[str, Any],
-    limit: int,
-) -> tuple[list[str], dict[str, str]]:
-    """Allocate the grep budget with the same evidence ordering as selection."""
-    candidates: dict[str, dict[str, Any]] = {}
-    order = 0
-
-    def add(values: Sequence[str], stage_for: Any) -> None:
-        nonlocal order
-        for raw in values:
-            value = str(raw).strip()
-            folded = value.casefold()
-            if not value:
-                continue
-            stage = stage_for(value) if callable(stage_for) else str(stage_for)
-            strength = _retrieval_evidence_strength({"retrieval_stage": stage})
-            existing = candidates.get(folded)
-            if existing is None:
-                candidates[folded] = {"value": value, "stage": stage, "strength": strength, "order": order}
-                order += 1
-            elif strength > int(existing["strength"]):
-                existing["stage"] = stage
-                existing["strength"] = strength
-
-    add(ticket_anchors, lambda value: _ticket_anchor_stage(value, query_facts))
-    add(duty_anchors, "exact_code_duty")
-    ordered = sorted(candidates.values(), key=lambda item: (-int(item["strength"]), int(item["order"])))[:limit]
-    anchors = [str(item["value"]) for item in ordered]
-    stages = {str(item["value"]).casefold(): str(item["stage"]) for item in ordered}
-    return anchors, stages
 
 
 def _cosine(left: Sequence[float], right: Sequence[float]) -> float:
@@ -1967,11 +1386,6 @@ def build_source_retrieval(
         max_chars=int(getattr(config, "max_query_chars", 1600)),
         retrieval_aliases=retrieval_aliases,
     )
-    duty_query = build_code_duty_query(
-        bug_snapshot=source_bug_snapshot,
-        query_facts=source_query_facts,
-        max_chars=min(640, int(getattr(config, "max_query_chars", 1600))),
-    )
     architecture_resolution = resolve_module_architecture(
         repository_root=root,
         repository=repository,
@@ -2026,12 +1440,11 @@ def build_source_retrieval(
         return retained
 
     base = {
-        "schema_version": 4,
+        "schema_version": 5,
         "provider": "tabby",
         "repository": repository,
         "source_revision": revision,
         "query": query,
-        "duty_query": duty_query,
         "entries": [],
         "relations": [],
         "resource_coverage": [],
@@ -2039,7 +1452,6 @@ def build_source_retrieval(
         "rejections": [],
         "metrics": {
             "query_chars": len(query),
-            "duty_query_chars": len(duty_query),
             "source_excluded_device_identifier_count": len(device_identifiers),
             "raw_candidate_count": 0,
             "entry_count": 0,
@@ -2073,20 +1485,11 @@ def build_source_retrieval(
     if token:
         headers["Authorization"] = f"Bearer {token}"
     max_anchor_queries = int(getattr(config, "max_anchor_queries", 8))
-    ticket_anchors = build_retrieval_anchors(
-        query=query,
-        query_facts=source_query_facts,
+    anchors = build_retrieval_anchors(
+        runtime_evidence=runtime_evidence,
         max_anchors=max_anchor_queries,
-        retrieval_aliases=retrieval_aliases,
     )
-    duty_anchors = _code_duty_anchor_terms(bug_snapshot=source_bug_snapshot, query_facts=source_query_facts)
-    anchors, anchor_stages = _allocate_source_anchor_queries(
-        ticket_anchors=ticket_anchors,
-        duty_anchors=duty_anchors,
-        query_facts=source_query_facts,
-        limit=max_anchor_queries,
-    )
-    fallback_concepts: list[str] = []
+    anchor_stages = {anchor.casefold(): "exact_preparation" for anchor in anchors}
     requested_layers = _requested_implementation_layers(source_query_facts)
     product_scope_tokens = build_product_scope_tokens(
         source_bug_snapshot,
@@ -2120,9 +1523,7 @@ def build_source_retrieval(
         if not isinstance(selected, Mapping):
             return {**base, "status": "unavailable", "reason": "tabby_repository_not_registered"}
         hybrid_items: list[dict[str, Any]] = []
-        duty_items: list[dict[str, Any]] = []
         hybrid_status = "unavailable"
-        duty_status = "not_run"
         source_id = str(selected.get("sourceId") or "")
 
         def collect_hybrid(query_text: str, *, stage: str) -> tuple[list[dict[str, Any]], str]:
@@ -2159,10 +1560,7 @@ def build_source_retrieval(
 
         if source_id:
             hybrid_items, hybrid_status = collect_hybrid(query, stage="tabby_hybrid")
-            if duty_query and duty_query != query:
-                duty_items, duty_status = collect_hybrid(duty_query, stage="tabby_code_duty")
         exact_items: list[dict[str, Any]] = []
-        concept_items: list[dict[str, Any]] = []
         grep_query = """
             query RepositoryGrep($kind: RepositoryKind!, $id: ID!, $query: String!) {
               repositoryGrep(kind: $kind, id: $id, query: $query) {
@@ -2223,31 +1621,10 @@ def build_source_retrieval(
                 )
             )
 
-        retrieve(anchors, stage="exact_anchor", destination=exact_items, stages_by_term=anchor_stages)
-        pre_fallback_items = [*hybrid_items, *duty_items, *exact_items]
-        missing_layers_before_fallback = _missing_implementation_layers(pre_fallback_items, requested_layers)
-        if not hybrid_items or not duty_items or missing_layers_before_fallback:
-            fallback_concepts = build_fallback_concepts(
-                bug_snapshot=source_bug_snapshot,
-                query_facts=source_query_facts,
-                runtime_evidence=runtime_evidence,
-                exact_anchors=anchors,
-                max_concepts=int(getattr(config, "max_fallback_concepts", 8)),
-            )
-            retrieve(fallback_concepts, stage="concept_expansion", destination=concept_items)
-        lexical_items = _fuse_candidate_pools(
-            pools=(exact_items, concept_items),
-            limit=max_raw_candidates,
-        )
-        ranking_query = "\n".join(part for part in (duty_query, query) if part).strip()[:2_400]
-        lexical_items, semantic_status = _semantic_rank(
-            query=ranking_query,
-            items=lexical_items,
-            config=config,
-            timeout=timeout,
-        )
+        retrieve(anchors, stage="exact_preparation", destination=exact_items, stages_by_term=anchor_stages)
+        lexical_items, semantic_status = _semantic_rank(query=query, items=exact_items, config=config, timeout=timeout)
         raw_items = _fuse_candidate_pools(
-            pools=(hybrid_items, duty_items, lexical_items),
+            pools=(hybrid_items, lexical_items),
             limit=max_raw_candidates,
         )
     except (httpx.HTTPError, ValueError) as exc:
@@ -2315,7 +1692,6 @@ def build_source_retrieval(
         "rejections": rejections,
         "metrics": {
             "query_chars": len(query),
-            "duty_query_chars": len(duty_query),
             "source_excluded_device_identifier_count": len(device_identifiers),
             "raw_candidate_count": raw_candidate_count,
             "ranked_candidate_count": len(raw_items),
@@ -2323,21 +1699,16 @@ def build_source_retrieval(
             "packet_chars": packet_chars,
             "anchor_count": len(anchors),
             "exact_anchors": anchors,
-            "fallback_concept_count": len(fallback_concepts),
-            "fallback_concepts": fallback_concepts,
             "requested_implementation_layers": list(requested_layers),
-            "missing_layers_before_fallback": missing_layers_before_fallback,
             "missing_layers_after_selection": _missing_implementation_layers(entries, requested_layers),
             "architecture_status": architecture_resolution.get("status"),
             "architecture_model": architecture_resolution.get("model"),
             "architecture_module_count": int(architecture_resolution.get("configured_module_count") or 0),
             "product_scope_tokens": product_scope_tokens,
             "business_alias_count": len(tuple(retrieval_aliases)),
-            "retrieval_mode": ("tabby_hybrid" if hybrid_items else "layered" if exact_items and concept_items else "concept_fallback" if concept_items else "exact_anchor" if exact_items else "none"),
+            "retrieval_mode": ("terra_query_and_exact_anchors" if hybrid_items and exact_items else "terra_query" if hybrid_items else "terra_exact_anchors" if exact_items else "none"),
             "tabby_hybrid_status": hybrid_status,
             "tabby_hybrid_candidate_count": len(hybrid_items),
-            "tabby_code_duty_status": duty_status,
-            "tabby_code_duty_candidate_count": len(duty_items),
             "semantic_status": semantic_status,
         },
     }

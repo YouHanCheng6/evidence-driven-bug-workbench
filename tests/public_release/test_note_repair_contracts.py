@@ -183,6 +183,18 @@ class NoteRepairContracts(unittest.TestCase):
             self.workspace.track([self.item(), self.item()], note)
         self.assertEqual(len(self.workspace.items), 2)
 
+    def test_fenced_code_examples_cannot_become_duplicate_requirements(self):
+        example = "label = 'after'"
+        note = self.note + "\n修改后：\n```python\n" + example + "\n```"
+        with self.assertRaises(ValueError):
+            self.workspace.track([self.item(), self.item(instruction=example)], note)
+        self.assertEqual(self.workspace.items, [])
+        self.workspace.track([self.item()], note)
+        self.assertEqual(len(self.workspace.items), 1)
+        self.assertFalse(
+            repair._instruction_is_only_fenced_example(note + "\n" + example, example)
+        )
+
     def test_replacement_requires_read_unique_text_and_clean_working_file(self):
         self.workspace.track([self.item()], self.note)
         with self.assertRaises(ValueError):

@@ -61,13 +61,12 @@ async def start_selected_bug_workbench_batch_tool(
         list[int] | None,
         "当前用户消息明确列出的 Bug 编号。只要本轮列出了编号，就必须完整传入并只运行这些编号；仅在用户说‘运行这批/运行刚才选中的’而未列编号时省略。",
     ] = None,
-    rerun: Annotated[bool, "仅用户明确要求重新运行同一集合时为 true。"] = False,
     tool_call_id: Annotated[str, InjectedToolCallId] = "",
 ) -> Command:
-    """启动串行 Bug 批次并立即结束当前轮；本轮明确编号优先，否则使用已保存集合。"""
+    """启动新的串行 Bug 批次并立即结束当前轮；本轮明确编号优先，否则使用已保存集合。"""
     from app.gateway.main_agent_bug_batch import start_selected_bug_batch
 
-    confirmation = await start_selected_bug_batch(runtime, bug_ids=bug_ids, rerun=rerun)
+    confirmation = await start_selected_bug_batch(runtime, bug_ids=bug_ids, request_id=tool_call_id)
     return Command(
         update={
             "messages": [

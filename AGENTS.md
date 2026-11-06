@@ -13,17 +13,26 @@ Runtime compatibility is not established. Validate offline changes with
 `python3.12 -m unittest discover -s tests/public_release -v`; these do not substitute
 for end-to-end workflow tests. See `docs/personal/REDACTION_AND_LIMITATIONS.md`.
 
-The 2026-10-22 snapshot preserves evidence-role investigation and source-provenance
-retrieval ranking. A separate read-only log expert selects original source/line
-references; the backend restores complete redacted records for investigation.
-Optional section-four execution begins only after verified note writeback, tracks
-every local requirement and reports actual files and partial/incomplete outcomes.
-It is disabled in the public example configuration. Snapshot rollback/restore
-does not invoke a model or restart analysis. Visual extraction remains ephemeral,
-tool-free and Codex-only in this edition. The optional `examplewiki` interface's
-eight `example_*` read tools are fictional adapter names; deployers must implement
-their own authorized mapping. Never include actual connection JSON, knowledge
-content, runtime log indexes or source-change snapshots in this repo.
+The 2026-11-06 snapshot uses one read-only preparation turn for ticket/visual
+facts, paged original-log queries and direct Tabby input. It returns source-line
+references, a semantic query and at most eight original anchors; the backend
+restores complete redacted records. No symbols parser, keyword tables, concept
+fallback or code-duty query regeneration remains. Product configuration only
+filters source scope. File history is bounded to eight changes and an imminent
+already-fixed conclusion must check the directly related fix date.
+Optional section-four execution tracks prose requirements rather than duplicate
+fenced examples, permits one bounded completion turn, and reports actual files
+and partial/incomplete outcomes. A separate deterministic operator-local Git
+delivery path supports isolated-index relay publication, explicit uncommitted
+fetch and explicitly approved submit/rebase/push. Repair and relay are disabled
+in public examples; remote addresses and author identities are placeholders.
+Coworker executors, pairing, remote job queues, their routes and distribution
+archives are deliberately excluded. Feishu host fetch/submit requires a configured
+exact operator identity; an empty allowlist denies it. Snapshot rollback/restore
+never invokes a model. Visual extraction remains ephemeral, tool-free and Codex-only.
+The optional `examplewiki` interface's eight `example_*` read tools are fictional
+adapter names. Never add actual connections, knowledge content, log indexes,
+credentials, source-change snapshots or Git delivery records to this repo.
 
 This file provides guidance to AI coding agents (Claude Code, Codex, and others) when working with code in this repository. It is the source of truth; the sibling `CLAUDE.md` imports it via `@AGENTS.md`.
 

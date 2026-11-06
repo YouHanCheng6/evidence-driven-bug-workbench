@@ -70,7 +70,7 @@ async def start_from_main_agent(runtime, bug_id: int) -> str:
     )
 
 
-async def change_code_from_main_agent(runtime, bug_id: int, action: Literal["rollback", "restore"]) -> str:
+async def change_code_from_main_agent(runtime, bug_id: int, action: Literal["rollback", "restore", "fetch", "submit"]) -> str:
     """Use the same owner-scoped API as Workbench buttons and Feishu commands."""
     context = runtime.context if isinstance(runtime.context, Mapping) else {}
     owner = resolve_runtime_user_id(runtime)
@@ -84,9 +84,18 @@ async def change_code_from_main_agent(runtime, bug_id: int, action: Literal["rol
     token = generate_csrf_token()
     headers = create_internal_auth_headers(owner_user_id=owner)
     headers.update({CSRF_HEADER_NAME: token, "Cookie": f"{CSRF_COOKIE_NAME}={token}", "X-DeerFlow-Bug-Action-Source": "main_agent"})
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    timeout = 180.0 if action in {"fetch", "submit"} else 30.0
+    async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(f"{gateway.rstrip('/')}/api/bug-workflows/by-bug/{bug_id}/{action}", headers=headers)
     payload = response.json()
     if response.is_error:
         return f"Bug #{bug_id}：{payload.get('detail', '操作未完成')}"
+    if action == "submit":
+        delivery = payload.get("git_delivery")
+        if isinstance(delivery, dict) and isinstance(delivery.get("report"), str):
+            return delivery["report"]
+    if action == "fetch":
+        delivery = payload.get("local_test_delivery")
+        if isinstance(delivery, dict) and isinstance(delivery.get("report"), str):
+            return delivery["report"]
     return str(payload["completion_report"])

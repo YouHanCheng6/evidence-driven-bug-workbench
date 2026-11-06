@@ -14,30 +14,51 @@ Read `../docs/personal/SOURCE_MAP.md` and the redaction limitations before edits
 Enterprise data, private Agent files and customized business fixtures are absent.
 The public baseline tests below are not proof of this edition's compatibility.
 
-Current public snapshot (2026-10-22): `bug_codex_summary.py` gates optional
+Current public snapshot (2026-11-06): `bug_codex_summary.py` gates optional
 `examplewiki` access on an evidence-backed embedded fault hypothesis and checks
 report responsibility consistency. Eight fictional read tools are allowlisted;
 credentials are runtime-only. `bug_attachment_evidence.py` has a separate
 ephemeral tool-free visual extraction turn, with the legacy extractor removed
 from this public edition. `bug_log_query_runtime.py` streams accepted sources
 into private SQLite indexes while preserving physical line and segment locations.
-`bug_log_expert.py` selects source/line references in a fresh read-only Codex turn;
-the backend restores complete redacted original records, without a fixed record
-quota or the retired signal-ranking/excerpt-merging pipeline. Retrieval preserves
-provenance tiers through every cut and file-level fusion; product configuration
-filters source scope but never manufactures candidates. History is
-conditional on an explicit regression/version question or a known direct change
-at a verified fault target. The SDK read-only sandbox is not host-wide read
-isolation. Offline public contracts live in `../tests/public_release/`.
+`bug_log_expert.py` uses a fresh read-only preparation turn for source-line
+references plus a direct semantic query and at most eight original anchors.
+The backend restores complete redacted records. Search is explicitly paginated;
+no attachments produce a valid empty index. Symbols parsing, keyword tables,
+concept expansion and code-duty query regeneration are retired. Retrieval consumes
+the query/anchors directly, ranks each view and fuses by file; product configuration
+only filters scope. File history is limited to eight changes in a verified fault
+target; an imminent already-fixed conclusion must check its directly related fix
+date, and a fix older than one month that still reproduces cannot be dismissed as
+unreleased. The SDK read-only sandbox is not host-wide read isolation. Offline
+public contracts live in `../tests/public_release/`.
 
 `bug_note_repair.py` registers the complete explicit local-requirement list before
 staging exact edits, then persists item reasons, `repair_outcome` and actual files.
+Fenced before/after examples cannot become extra requirements. One bounded
+completion turn may settle a normally returned but still-pending checklist;
+interrupted work remains unfinished.
 Successful changes survive partial/incomplete execution; the serial batch can
 continue. It exposes no shell, tests, Git commit, MCP or fresh investigation.
 `bug_rollback.py` owns before/after snapshots and owner-scoped rollback/restore;
 content conflicts preserve subsequent work and these actions never invoke a model.
 `repairing` is nonterminal and `note_written` is terminal after optional execution;
 terminal workflow state does not imply every repair item was completed.
+
+`bug_git_delivery.py` is a separate deterministic permission boundary: a temporary
+Git index publishes only repair files to a configured private relay without moving
+the repair checkout HEAD/index. Explicit fetch leaves the operator's matching
+checkout on its current branch with uncommitted changes; explicitly approved
+submit commits complete current contents of the original repair file set, including
+later manual edits in those files, then rebases/pushes the existing tracked branch.
+Other files are excluded. Repair/relay examples are disabled with no real remote.
+Rollback/restore does not undo the operator's fetched checkout.
+`channels/feishu_operation_intent.py` normalizes only control intents without tools;
+missing Bug IDs are requested, never inferred. Feishu host fetch/submit requires
+the exact configured `bug_workbench_server_local_open_id`; unset means deny.
+That key is authorization only. Coworker execution, pairing, remote queues/routes
+and their distribution package are not part of this edition. Never reintroduce them
+as a dependency of operator-local delivery.
 
 This file provides guidance to AI coding agents (Claude Code, Codex, and others) when working with code in this repository. It is the source of truth; the sibling `CLAUDE.md` imports it via `@AGENTS.md`.
 

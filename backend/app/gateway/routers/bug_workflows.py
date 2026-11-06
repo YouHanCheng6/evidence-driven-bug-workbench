@@ -11,6 +11,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Request
 from sqlalchemy.exc import IntegrityError
 
+from app.gateway.bug_git_delivery import BugGitDeliveryError, deliver_bug_repair, fetch_bug_repair_for_test, sync_bug_relay
 from app.gateway.bug_rollback import prepare_repair_change, restore_repair, rollback_repair
 from app.gateway.bug_workflow import (
     _public_bug_workflow_error,
@@ -35,6 +36,13 @@ router = APIRouter(prefix="/api/bug-workflows", tags=["bug-workflows"])
 logger = logging.getLogger(__name__)
 _TERMINAL_WORKFLOW_STATUSES = frozenset({"note_written", "skipped", "cancelled", "analysis_incomplete", "failed", "accepted", "rolled_back"})
 _REPAIR_ACTION_LOCKS: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
+
+
+async def _workspace_owner(request: Request) -> str:
+    owner_user_id = await get_current_user(request)
+    if not owner_user_id:
+        raise HTTPException(status_code=401, detail="Authentication is required")
+    return owner_user_id
 
 
 def _summary_response(workflow: dict) -> BugWorkflowSummaryResponse:
@@ -137,9 +145,8 @@ def _response(workflow: dict) -> BugWorkflowResponse:
             }
         source_retrieval = public_workflow.get("source_retrieval")
         if isinstance(source_retrieval, dict):
-            # The assembled query repeats ticket and runtime facts. The UI only
-            # needs the bounded retrieval plan, current-source candidates, and
-            # rejection diagnostics; keep the raw query server-side.
+            # The Terra-authored query and exact anchors are part of the
+            # reviewable preparation result shown beside current-source candidates.
             public_workflow["source_retrieval"] = {
                 key: source_retrieval[key]
                 for key in (
@@ -147,6 +154,7 @@ def _response(workflow: dict) -> BugWorkflowResponse:
                     "provider",
                     "repository",
                     "source_revision",
+                    "query",
                     "status",
                     "reason",
                     "entries",
@@ -175,9 +183,7 @@ def _response(workflow: dict) -> BugWorkflowResponse:
 
 
 async def _get_workflow(request: Request, workflow_id: str) -> tuple[str, dict]:
-    owner_user_id = await get_current_user(request)
-    if not owner_user_id:
-        raise HTTPException(status_code=401, detail="Authentication is required")
+    owner_user_id = await _workspace_owner(request)
     record = await get_thread_store(request).get(workflow_id, user_id=owner_user_id)
     workflow = record.get("metadata", {}).get("bug_workflow") if record else None
     if not isinstance(workflow, dict):
@@ -223,9 +229,7 @@ def _resolve_video_clarification_submission(
 @router.post("", response_model=BugWorkflowResponse, status_code=202)
 async def create_bug_workflow(body: CreateBugWorkflowRequest, request: Request) -> BugWorkflowResponse:
     """Investigate, verify this run's note, then execute configured local changes."""
-    owner_user_id = await get_current_user(request)
-    if not owner_user_id:
-        raise HTTPException(status_code=401, detail="Authentication is required")
+    owner_user_id = await _workspace_owner(request)
     repair_config = get_app_config().bug_analysis.repair
     auto_repair = repair_config.enabled and body.auto_repair is not False
     if body.auto_repair is True and not repair_config.enabled:
@@ -261,7 +265,7 @@ async def create_bug_workflow(body: CreateBugWorkflowRequest, request: Request) 
         status="routing",
         actor_source="feishu" if body.channel_key else "workbench",
         event_type="workflow_started",
-        summary="Bug Workbench 已开始读取工单事实",
+        summary="example_user 已开始读取工单事实",
     )
     metadata: dict[str, Any] = {"bug_workflow": workflow}
     if body.channel_key:
@@ -299,10 +303,8 @@ async def create_bug_workflow(body: CreateBugWorkflowRequest, request: Request) 
 
 @router.get("", response_model=BugWorkflowListResponse)
 async def list_bug_workflows(request: Request, limit: int = 20) -> BugWorkflowListResponse:
-    """List bounded Bug Workbench roots owned by the authenticated user."""
-    owner_user_id = await get_current_user(request)
-    if not owner_user_id:
-        raise HTTPException(status_code=401, detail="Authentication is required")
+    """List bounded roots in the authenticated user's shared Bug Workbench."""
+    owner_user_id = await _workspace_owner(request)
     result = await read_bug_workbench(
         get_thread_store(request),
         owner_user_id=owner_user_id,
@@ -315,9 +317,7 @@ async def list_bug_workflows(request: Request, limit: int = 20) -> BugWorkflowLi
 @router.get("/active", response_model=BugWorkflowResponse | None)
 async def get_active_bug_workflow(channel_key: str, request: Request) -> BugWorkflowResponse | None:
     """Recover the newest resumable IM Bug workflow for one exact chat."""
-    owner_user_id = await get_current_user(request)
-    if not owner_user_id:
-        raise HTTPException(status_code=401, detail="Authentication is required")
+    owner_user_id = await _workspace_owner(request)
     rows = await get_thread_store(request).search(
         metadata={"bug_workflow_channel_key": channel_key},
         limit=20,
@@ -335,9 +335,7 @@ async def get_active_bug_workflow(channel_key: str, request: Request) -> BugWork
 @router.get("/latest", response_model=BugWorkflowResponse | None)
 async def get_latest_bug_workflow(request: Request, channel_key: str | None = None) -> BugWorkflowResponse | None:
     """Return the newest chat-bound or owner-wide Bug Workbench task."""
-    owner_user_id = await get_current_user(request)
-    if not owner_user_id:
-        raise HTTPException(status_code=401, detail="Authentication is required")
+    owner_user_id = await _workspace_owner(request)
     if channel_key:
         rows = await get_thread_store(request).search(
             metadata={"bug_workflow_channel_key": channel_key},
@@ -368,9 +366,7 @@ async def get_latest_bug_workflow_by_bug_id(bug_id: int, request: Request) -> Bu
     resumes that exact root instead of submitting a duplicate analysis.
     """
 
-    owner_user_id = await get_current_user(request)
-    if not owner_user_id:
-        raise HTTPException(status_code=401, detail="Authentication is required")
+    owner_user_id = await _workspace_owner(request)
     result = await read_bug_workbench(
         get_thread_store(request),
         owner_user_id=owner_user_id,
@@ -575,6 +571,9 @@ async def _change_workflow_code(workflow_id: str, request: Request, *, restore: 
     lock = _REPAIR_ACTION_LOCKS.setdefault(workflow_id, asyncio.Lock())
     async with lock:
         owner, workflow = await _get_workflow(request, workflow_id)
+        delivery = workflow.get("git_delivery")
+        if isinstance(delivery, dict) and delivery.get("commit"):
+            raise HTTPException(status_code=409, detail="本次修改已经创建公司仓库提交，不能再作为未提交修改回退或恢复；推送失败时请重试推送或在 SourceTree 处理")
         if workflow.get("status") not in {"awaiting_acceptance", "note_written", "failed", "cancelled", "accepted", "rolled_back"}:
             raise HTTPException(status_code=409, detail="当前任务尚未结束，不能回退或恢复代码")
         snapshot = workflow.get("rollback")
@@ -613,6 +612,14 @@ async def _change_workflow_code(workflow_id: str, request: Request, *, restore: 
         files = [f"{changed.get('repository') or 'repository'}/{entry['path']}" for entry in changed["files"]]
         verb = "恢复" if restore else "回退"
         report = f"Bug #{workflow['bug_id']}：已{verb}本次修改，共 {len(files)} 个文件。\n" + "\n".join(files)
+        relay_delivery = workflow.get("relay_delivery")
+        should_sync_relay = isinstance(relay_delivery, dict) and ((restore and relay_delivery.get("status") in {"withdrawn", "sync_failed"}) or (not restore and relay_delivery.get("status") in {"published", "sync_failed"}))
+        if should_sync_relay:
+            try:
+                relay_delivery = await asyncio.to_thread(sync_bug_relay, relay_delivery, restore=restore)
+            except (BugGitDeliveryError, OSError, RuntimeError, ValueError) as exc:
+                relay_delivery = {**relay_delivery, "status": "sync_failed", "report": f"本地已{verb}，但中转分支同步失败：{exc}"}
+            report = f"{report}\n{relay_delivery['report']}"
         result = await _persist_transition(
             request,
             workflow_id=workflow_id,
@@ -621,7 +628,7 @@ async def _change_workflow_code(workflow_id: str, request: Request, *, restore: 
             status=str(changed["applied_status"]) if restore else "rolled_back",
             event_type="repair_restored" if restore else "repair_rolled_back",
             summary=f"已{verb}本次修改，共 {len(files)} 个文件",
-            details={"rollback": changed, "completion_report": report},
+            details={"rollback": changed, "relay_delivery": relay_delivery, "completion_report": report},
         )
         if cancelled:
             raise asyncio.CancelledError
@@ -629,14 +636,80 @@ async def _change_workflow_code(workflow_id: str, request: Request, *, restore: 
 
 
 @router.post("/by-bug/{bug_id}/{action}", response_model=BugWorkflowResponse)
-async def change_latest_bug_code(bug_id: int, action: Literal["rollback", "restore"], request: Request) -> BugWorkflowResponse:
-    """Use the latest actual modification, never a later zero-change analysis."""
-    owner = await get_current_user(request)
-    if not owner:
-        raise HTTPException(status_code=401, detail="Authentication is required")
+async def change_latest_bug_code(bug_id: int, action: Literal["rollback", "restore", "fetch", "submit"], request: Request) -> BugWorkflowResponse:
+    """Act on the latest actual modification, never a later zero-change analysis."""
+    owner = await _workspace_owner(request)
     if bug_id <= 0:
         raise HTTPException(status_code=422, detail="请提供有效 Bug 编号")
     result = await read_bug_workbench(get_thread_store(request), owner_user_id=owner, scope="latest_change", bug_id=bug_id)
     if not result.items:
-        raise HTTPException(status_code=404, detail=f"Bug #{bug_id} 没有本账号可回退或恢复的代码修改记录")
+        raise HTTPException(status_code=404, detail=f"Bug #{bug_id} 没有本账号可操作的代码修改记录")
+    if action == "fetch":
+        return await fetch_bug_workflow_changes(str(result.items[0]["id"]), request)
+    if action == "submit":
+        return await submit_bug_workflow_changes(str(result.items[0]["id"]), request)
     return await _change_workflow_code(str(result.items[0]["id"]), request, restore=action == "restore")
+
+
+@router.post("/{workflow_id}/fetch", response_model=BugWorkflowResponse)
+async def fetch_bug_workflow_changes(workflow_id: str, request: Request) -> BugWorkflowResponse:
+    """Copy the sender workspace's current repair files into the personal checkout."""
+    lock = _REPAIR_ACTION_LOCKS.setdefault(workflow_id, asyncio.Lock())
+    async with lock:
+        owner, workflow = await _get_workflow(request, workflow_id)
+        if workflow.get("status") not in {"note_written", "awaiting_acceptance", "accepted", "failed"}:
+            raise HTTPException(status_code=409, detail="当前任务尚未结束，不能拉取到个人本地代码库")
+        try:
+            fetched = await asyncio.to_thread(fetch_bug_repair_for_test, workflow)
+        except (BugGitDeliveryError, OSError, RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        result = await _persist_transition(
+            request,
+            workflow_id=workflow_id,
+            owner_user_id=owner,
+            workflow=workflow,
+            status=str(workflow["status"]),
+            event_type="local_test_applied",
+            summary="已把本次修改写入个人本地代码库，保持未提交",
+            details={"local_test_delivery": fetched},
+        )
+        return _response(result)
+
+
+@router.post("/{workflow_id}/submit", response_model=BugWorkflowResponse)
+async def submit_bug_workflow_changes(workflow_id: str, request: Request) -> BugWorkflowResponse:
+    """After explicit approval, commit, pull and push the tested personal checkout."""
+    lock = _REPAIR_ACTION_LOCKS.setdefault(workflow_id, asyncio.Lock())
+    async with lock:
+        owner, workflow = await _get_workflow(request, workflow_id)
+        if workflow.get("status") not in {"note_written", "awaiting_acceptance", "accepted", "failed", "rolled_back"}:
+            raise HTTPException(status_code=409, detail="当前任务尚未结束，不能提交代码")
+        try:
+            task = asyncio.create_task(asyncio.to_thread(deliver_bug_repair, workflow))
+            cancelled = False
+            try:
+                delivery = await asyncio.shield(task)
+            except asyncio.CancelledError:
+                delivery = await task
+                cancelled = True
+        except (BugGitDeliveryError, OSError, RuntimeError, ValueError) as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        status = str(delivery.get("status") or "failed")
+        summary = {
+            "submitted": "已提交、拉取并推送本次 Bug 修改",
+            "push_failed": "已提交并拉取，但推送未完成",
+            "conflict": "提交后拉取公司代码时发现冲突，已停止推送",
+        }.get(status, "本次 Bug 修改未完成提交")
+        result = await _persist_transition(
+            request,
+            workflow_id=workflow_id,
+            owner_user_id=owner,
+            workflow=workflow,
+            status=str(workflow["status"]),
+            event_type="git_submitted" if status == "submitted" else "git_submission_stopped",
+            summary=summary,
+            details={"git_delivery": delivery},
+        )
+        if cancelled:
+            raise asyncio.CancelledError
+        return _response(result)

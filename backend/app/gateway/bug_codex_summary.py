@@ -17,9 +17,11 @@ import shutil
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import urlsplit
+from zoneinfo import ZoneInfo
 
 from deerflow.config.runtime_paths import runtime_home
 
@@ -126,7 +128,7 @@ def _git_history_result(output: str) -> dict[str, Any] | None:
             "status": value.get("status"),
             "path": value.get("path"),
             "diagnostics": value.get("diagnostics") if isinstance(value.get("diagnostics"), list) else [],
-            "commits": [{key: commit[key] for key in ("sha", "committed_at", "subject") if key in commit} for commit in commits if isinstance(commit, dict)][:4],
+            "commits": [{key: commit[key] for key in ("sha", "committed_at", "subject") if key in commit} for commit in commits if isinstance(commit, dict)][:8],
         }
     return None
 
@@ -177,6 +179,7 @@ async def investigate_bug_with_codex(
 
     view = _repository_view(source_view_root, repository)
     embedded_wiki = load_example_wiki_mcp()
+    analysis_date = datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
     ticket = json.dumps(dict(bug_snapshot), ensure_ascii=False, default=str)
     context = json.dumps(dict(prepared_context), ensure_ascii=False, default=str)
     evidence_rule = (
@@ -188,10 +191,11 @@ async def investigate_bug_with_codex(
     embedded_rule = (
         "嵌入式 WIKI：先用已交接的工单、本地源码和同事务日志判断嵌入式是否是故障目标；没有已交接的同事务日志时，不假定日志缺失或已检索。"
         "只有现有证据已经形成嵌入式故障假设——设备自身响应或状态可能异常、设备协议/固件逻辑可能直接形成现象，或观测行为与应有设备契约冲突——才调用 `examplewiki`。"
-        "仅出现设备数据、设备错误码、固件版本未知、两端记录不一致，或需要清理/追溯设备内数据，都不能单独触发 MCP。调用前写明故障假设、指向它的现有证据、待改变的责任决策和足以确认或排除它的结果；"
-        "项目不明时才用 `example_list_projects`。先用最特异的事件、命令或错误码核对设备契约及同事务表现：若表现符合契约，立即判定嵌入式已排除并停止 MCP；若仍冲突，"
-        "才沿同一共享标识读取产生条件、返回码和必要的跨芯片传递边。定义、枚举或转发命中不是产生证据，不能以一次宽搜零命中替代已知标识的引用/调用追踪，也不为补全整条链巡检芯片。源码须与同事务日志核对，"
-        "不能代替运行固件证明；HTTP 5xx 时仅可在同一故障假设仍开放时收窄一次。得到确认、排除或明确源码覆盖缺口后立即回到主分析；设备持有数据或源码覆盖不足本身不等于嵌入式负责。"
+        "仅出现设备数据、设备错误码、固件版本未知、两端记录不一致，或需要清理/追溯设备内数据，都不能单独触发 MCP。"
+        "调用前写明故障假设、指向它的现有证据、待改变的责任决策和足以确认或排除它的结果；项目不明时才用 `example_list_projects`。"
+        "先用最特异的事件、命令或错误码核对设备契约及同事务表现：若表现符合契约，立即判定嵌入式已排除并停止 MCP；若仍冲突，才沿同一共享标识读取产生条件、返回码和必要的跨芯片传递边。"
+        "定义、枚举或转发命中不是产生证据，不能以一次宽搜零命中替代已知标识的引用/调用追踪，也不为补全整条链巡检芯片。源码须与同事务日志核对，不能代替运行固件证明；"
+        "HTTP 5xx 时仅可在同一故障假设仍开放时收窄一次。得到确认、排除或明确源码覆盖缺口后立即回到主分析；设备持有数据或源码覆盖不足本身不等于嵌入式负责。"
         if embedded_wiki
         else ""
     )
@@ -205,7 +209,7 @@ async def investigate_bug_with_codex(
     )
     prompt = "\n\n".join(
         (
-            f"只读调查禅道 Bug #{bug_id}。当前目录是 {repository} 的源码视图。你负责从工单事实开始调查，并在本轮结束时直接输出完整中文报告。",
+            f"只读调查禅道 Bug #{bug_id}。本次分析日期是 {analysis_date}（Asia/Shanghai）。当前目录是 {repository} 的源码视图。你负责从工单事实开始调查，并在本轮结束时直接输出完整中文报告。",
             evidence_rule,
             "先给材料定角色：故障目标=形成异常的实现；正确对照=说明正确表现的端/版本；现象见证=展示或透传上游结果；风险候选=可能改变主责、修改文件或方案的近邻；其余丢弃。"
             "复现端、候选层、截图或外部资料命中不自动新增故障目标。只为故障目标关闭四项：①真实入口；②异常参数/状态/分支/资源契约；③机制如何形成现象；④责任边界与修改点或外部输入。"
@@ -213,34 +217,42 @@ async def investigate_bug_with_codex(
             "执行：不设固定工具调用次数；每次调用须能区分仍开放的责任、修改范围或方案决策。入口未知时，把页面标题、动作、特异文案、资源 key、事件名合并为一次有界检索，不逐词试探。"
             "同一决策的相邻源码窗口、同文件方法和资源值合并读取；不要每次复述台账。本地辅助工具因参数、缓存或沙箱失败一次后不重试，改用一次有界文本检索或保留缺口。",
             "收尾：只关闭证据实际证明的决策。判断当前代码已修复、无需修改前，须确认工单异常条件下实际产生的信号或状态，能经当前产品的接收与调用条件到达处理入口，并完成预期动作；"
-            "已有处理函数、注释、某个回调或某层发出事件，都不能单独证明这条关系成立。关键触发或接收关系未确认，决策仍开放；当前源码明确缺少处理则给出修改，无法确认则说明具体缺口，不把未验证写成已修复，"
-            "也不把源码路径可达说成现场已验证。仅核对能改变责任、修改范围或方案的关键关系，结论已有充分证据或明确剩余缺口后立即写报告，不为补全无关链路继续调查。正确对照只确认当前契约，现象见证只确认传递边界，"
-            "两者不追根因、不查历史；风险候选只检查本次修改直接影响的契约，不另起调查。报告栏目、相似页面、截图其他控件不能授权继续调查。",
+            "已有处理函数、注释、某个回调或某层发出事件，都不能单独证明这条关系成立。关键触发或接收关系未确认，决策仍开放；当前源码明确缺少处理则给出修改，无法确认则说明具体缺口，"
+            "不把未验证写成已修复，也不把源码路径可达说成现场已验证。仅核对能改变责任、修改范围或方案的关键关系，结论已有充分证据或明确剩余缺口后立即写报告，不为补全无关链路继续调查。"
+            "正确对照只确认当前契约，现象见证只确认传递边界，两者不追根因、不查历史；风险候选只检查本次修改直接影响的契约，不另起调查。报告栏目、相似页面、截图其他控件不能授权继续调查。",
             "条件权限：归属未定时只核对一个最可能改变 RN/Android/iOS/其他端归属的同级入口；已有入口不做全端巡检。文案从明确视觉事实追到真实消费者和资源，"
             "同名文本/key 仅是候选。只有结论依赖可变状态时才追初始化与后续写入；只有并发、顺序、重复、丢失、超时仍无法由已证契约解释时才查队列/重试；"
             + ("云端已是边界时写所需输入并停止外猜。" if embedded_wiki else "源码无法区分多条可达路径时才用一次同设备同事务日志；设备、嵌入式或云端已是边界时写所需输入并停止外猜。"),
             *((embedded_rule,) if embedded_wiki else ()),
-            "历史：当前源码未复现不自动允许查历史。仅当工单明确问回归/版本变化，或已知旧值到当前值的直接变更可关闭责任或方案时，"
-            "才对故障目标的已验证入口文件运行一次 `python .deerflow-git-history-runner.py --path <文件> --max-commits 4`。"
-            "缺截图包版本/构建提交时，历史不能证明截图版本；正确对照、见证、风险和相似页面禁止查历史。历史中的直接移除仍须按收尾规则核对当前异常路径，不去别处补造现因。",
+            "历史：当前源码未复现不自动允许查历史。仅当工单明确问回归/版本变化、已知旧值到当前值的直接变更可关闭责任或方案，或准备以`当前代码已修复/无需重复修改`收尾时，"
+            "才对故障目标的已验证入口文件运行一次 `python .deerflow-git-history-runner.py --path <文件> --max-commits 8`。"
+            "工具最后一行 `GIT_HISTORY_COMMIT_METADATA=` 单独给出完整提交日期与标题；只要该行非空，就不得写历史工具为空或未返回提交元数据。"
+            "`patch_truncated=true` 只表示该提交的 diff 正文被截断，不得据此声称提交日期或标题未取得。"
+            "最后一种情况必须先取得与本单异常直接相关的修复提交日期并与本次分析日期比较：提交距本次分析已超过一个月而当前最新代码仍能复现时，该处理属于长期存在的当前行为，"
+            "禁止以`可能未发布`、`核对发布版本`或`无需重复修改`结束；继续沿本次运行观察和当前异常路径调查该处理为何未完成预期动作，直到找到新的故障点或写清阻止继续判断的具体证据缺口。"
+            "缺截图包版本/构建提交时，历史不能证明截图版本，但不能用这个缺口跳过上述长期既有修复后的继续调查；正确对照、见证、风险和相似页面禁止查历史。"
+            "历史中的直接移除仍须按收尾规则核对当前异常路径，不去别处补造现因。",
             "工具：先核对最相关 Tabby 候选，相关才沿调用/状态边继续。只有定义/引用/类型关系会改变开放决策且已有定义路径:行号时，"
-            "才用 `.deerflow-source-query-runner.py`；资源 key 不是代码符号。横向只查同一契约、开关或修改集合必需的兄弟项。搜索命中和模型自述不算已读源码。"
-            "只读：不编辑、不构建测试、不安装、不写禅道；文本检索≤30行、源码窗口≤100行、日志≤50行、每次 max_output_tokens≤2000。",
+            "才用 `.deerflow-source-query-runner.py`；资源 key 不是代码符号。横向只查同一契约、开关或修改集合必需的兄弟项。"
+            "搜索命中和模型自述不算已读源码。只读：不编辑、不构建测试、不安装、不写禅道；文本检索≤30行、源码窗口≤100行、日志≤50行、每次 max_output_tokens≤2000。",
             "最终只写四个一级标题：一、分析结论；二、责任端与责任层；三、根本原因及源码证据；四、修改范围与其他端风险。第三部分保留关键源码仓库路径、行号、短原句及具体尚未闭合的边。",
             "若本轮调用过 `examplewiki`，第二部分必须单列`嵌入式判定：未涉及|已排除|已确认|证据不足`并说明依据；`已排除`或`未涉及`时不得在主要涉及端、配合项或待确认输入中继续归责嵌入式。"
             "第四部分第一行必须是`主要涉及端：`；只有嵌入式已确认，或证据已将未闭合故障边限定在嵌入式但 WIKI 覆盖不足时，才写`嵌入式配合：`；后端同理写`后端配合：`与具体同步边，"
             "没有该证据则省略。设备持有数据、现场固件映射、历史记录或测试日志缺口，应按实际数据提供方填写，不能默认写成嵌入式配合；"
-            "在`本地代码修改：`之前固定写一行`待确认输入：`，逐项写明提供方与具体所需信息（如`PRD：目标图；设计：素材`），确无待确认输入时写`待确认输入：无`；最后写`本地代码修改：`。"
+            "在`本地代码修改：`之前固定写一行`待确认输入：`，逐项写明提供方与具体所需信息（如`PRD：目标图；设计：素材`），确无待确认输入时写`待确认输入：无`；"
+            "最后写`本地代码修改：`。确有本地修改时，`本地代码修改：`后必须写出所有待修改文件的完整仓库路径，即使前文已经写过；确无本地修改时只写`本地代码修改：无`，其后不得再写源码路径，"
+            "证据路径只留在第三部分。"
             "不要另写客户端配合或内部 target/确定性计数。",
             "第四部分沿第三部分已证事实写具体问题、处理位置和下一步；同一单中已能修改和仍需确认的部分应分别交付。"
             "本地有可靠替换时，给具体文件、行号、`修改前：`和`修改后：`完整代码，并解释如何改变失败路径；"
             "已定位修改处但缺产品目标、设计素材或接口契约时，写清已证问题、修改处、缺什么、由谁提供及到位后如何修改，"
-            "不得用`暂无可确定的本地代码替换`概括整单。当前源码已修则写无需重复修改及待核对的发布版本；"
+            "不得用`暂无可确定的本地代码替换`概括整单。只有按历史规则确认相关修复未超过一个月时，当前源码已修才可写无需重复修改及待核对的发布版本；"
             "责任边界未定则写已证失败边和需谁确认什么，不提前指定单一主责。"
             "仅对尚不能确定替换的部分写明缺口。任何替换都必须核对实际接口签名、触发条件和因果前提，不能用兜底值或只读消费者冒充根因修复。"
-            "共享代码改动涉及原生方法、事件、参数或返回值时，从拟议改动沿直接相关的注册、调用、回调和清理逻辑，核对实际会执行该改动的平台及其接口支持；故障只在一端复现，不代表共享改动只影响该端。"
-            "检查限于这些具体关系，不做全文搜索、全仓扫描或全端巡检，不要求无关端补日志，也不把它新增为故障目标。平台能力不同时，在本地修改方案及修改前后代码中明确执行范围和兼容处理，注册与清理均须覆盖，"
-            "不能仅在回调内判断平台；只修某端时保持其他端原有行为，不无条件调用其不支持的接口，不擅自删除原有接口或扩展为全端改造。",
+            "共享代码改动涉及原生方法、事件、参数或返回值时，从拟议改动沿直接相关的注册、调用、回调和清理逻辑，核对实际会执行该改动的平台及其接口支持；故障只在一端复现，"
+            "不代表共享改动只影响该端。检查限于这些具体关系，不做全文搜索、全仓扫描或全端巡检，不要求无关端补日志，也不把它新增为故障目标。平台能力不同时，"
+            "在本地修改方案及修改前后代码中明确执行范围和兼容处理，注册与清理均须覆盖，不能仅在回调内判断平台；只修某端时保持其他端原有行为，不无条件调用其不支持的接口，"
+            "不擅自删除原有接口或扩展为全端改造。",
             citation_rule,
             "工单原始事实：\n" + ticket,
             "DeerFlow 前置材料（线索，不是已证明根因）：\n" + context,
@@ -312,8 +324,14 @@ async def investigate_bug_with_codex(
                 "command. Retry no failed local helper invocation for argument, "
                 "cache, or sandbox repair; use one bounded text-search fallback instead. "
                 "File history is permitted only for a verified fault-target entry when the "
-                "ticket has a regression/version question or a known old-to-current change can "
-                "close responsibility. Missing build identity does not authorize history. Never "
+                "ticket has a regression/version question, a known old-to-current change can "
+                "close responsibility, or the investigation is about to conclude that the current "
+                "code is already fixed and needs no repeated change. In that last case, obtain the "
+                "directly related fix date first. If that fix is more than one month older than the "
+                "analysis date and the defect still reproduces on current code, treat it as established "
+                "current behavior and continue investigating why the expected action is not completed; "
+                "do not stop at release verification or a possibly-unreleased claim. Missing build "
+                "identity does not waive that continuation rule. Never "
                 "use history for a reference, witness, risk candidate, or merely similar page. "
                 "A directly matching historical removal still requires checking the current "
                 "abnormal-condition path before claiming already fixed, never inventing a "
@@ -444,8 +462,9 @@ async def investigate_bug_with_codex(
                 + "。请在原会话已读证据基础上重新输出完整四段；"
                 + ("第二段必须单列`嵌入式判定：未涉及|已排除|已确认|证据不足`并说明依据；" if embedded_wiki_used else "")
                 + "第四段首行`主要涉及端：`；嵌入式已排除或未涉及时，主要涉及端、配合项和待确认输入均不得继续归责嵌入式；有证据才写`嵌入式配合：`或`后端配合：`。"
-                "在`本地代码修改：`之前固定写`待确认输入：提供方：具体信息`，无缺口时写`待确认输入：无`，最后写`本地代码修改：`。"
-                "同一单中已能修改和仍需确认的部分分别写清；已定位修改处但缺目标、素材或契约时写明提供方与到位后的动作，当前源码已修则写明发布核对，"
+                "在`本地代码修改：`之前固定写`待确认输入：提供方：具体信息`，无缺口时写`待确认输入：无`，最后写`本地代码修改：`。确有本地修改时，"
+                "`本地代码修改：`后必须写出所有待修改文件的完整仓库路径；确无本地修改时只写`本地代码修改：无`，其后不得写源码路径。"
+                "同一单中已能修改和仍需确认的部分分别写清；已定位修改处但缺目标、素材或契约时写明提供方与到位后的动作；只有已按历史规则确认相关修复未超过一个月时，当前源码已修才写明发布核对，"
                 "不得用`暂无可确定的本地代码替换`概括整单。可确定替换才成对给`修改前：`和`修改后：`；不新增事实。"
             )
             async with asyncio.timeout(min(timeout_seconds, 300)):

@@ -39,12 +39,6 @@ class BugSourceRetrievalConfig(BaseModel):
     timeout_seconds: float = Field(default=12.0, gt=0, le=60)
     max_candidates: int = Field(default=5, ge=1, le=8)
     max_anchor_queries: int = Field(default=8, ge=1, le=12)
-    max_fallback_concepts: int = Field(
-        default=8,
-        ge=1,
-        le=12,
-        description="Short ticket-led concepts used as a bounded second retrieval layer after exact anchors.",
-    )
     max_raw_candidates: int = Field(default=32, ge=5, le=48)
     max_query_chars: int = Field(default=1_600, ge=200, le=4_000)
     max_snippet_chars: int = Field(default=1_800, ge=400, le=4_000)
@@ -86,9 +80,9 @@ class BugPlatformResolutionConfig(BaseModel):
 
 
 class BugLogExpertConfig(BaseModel):
-    """Read-only Luna selection of indexed runtime-log records."""
+    """One read-only Codex preparation turn for logs and Tabby input."""
 
-    model_name: str = Field(default="gpt-6-luna", description="Codex model used to select runtime-log source lines.")
+    model_name: str = Field(default="gpt-5.6-terra", description="Codex model used to prepare log evidence and direct Tabby input.")
     reasoning_effort: Literal["minimal", "low", "medium", "high", "xhigh", "max"] = "medium"
 
 
@@ -110,6 +104,23 @@ class BugNoteRepairConfig(BaseModel):
     timeout_seconds: float = Field(default=600.0, gt=0, le=3600)
 
 
+class BugGitRelayConfig(BaseModel):
+    """Private Git relay used to hand one Bug change to the operator for testing.
+
+    The relay is deliberately separate from every company source remote.  A
+    repair is published here before testing; only the later explicit submit
+    action may use the source repository's existing tracked upstream.
+    """
+
+    enabled: bool = False
+    remote_url: str | None = Field(
+        default=None,
+        description="Git URL of the private example_user relay repository.",
+    )
+    remote_name: str = Field(default="example_user", min_length=1, max_length=64)
+    branch_prefix: str = Field(default="bug", min_length=1, max_length=64)
+
+
 class BugAnalysisConfig(BaseModel):
     """Codex investigation with optional execution of this run's report."""
 
@@ -121,3 +132,4 @@ class BugAnalysisConfig(BaseModel):
     visual: BugVisualEvidenceConfig = Field(default_factory=BugVisualEvidenceConfig)
     summary: BugAnalysisSummaryConfig = Field(default_factory=BugAnalysisSummaryConfig)
     repair: BugNoteRepairConfig = Field(default_factory=BugNoteRepairConfig)
+    git_relay: BugGitRelayConfig = Field(default_factory=BugGitRelayConfig)

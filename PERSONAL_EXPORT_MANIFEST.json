@@ -1,7 +1,7 @@
 {
   "schema_version": 3,
   "edition": "sanitized personal customization showcase",
-  "export_date": "2026-10-22",
+  "export_date": "2026-11-06",
   "public_base_commit": "88252e9b318d34e7e1867155ad2c77993320788e",
   "source": "author-requested sanitized snapshot of current source files; original Agent workspace remains untouched",
   "runtime_verified": false,
@@ -29,12 +29,20 @@
       "sha256": "4ae2346db10980aa03c7f12148d054ca135f167b13a28a5394e06e1481c8dcf9"
     },
     {
+      "path": "backend/app/channels/feishu_operation_intent.py",
+      "source_state": "untracked",
+      "sha256": "70dcd4a5cf298e02241862d6aa9f04c17e4aa7bdd6e4e91695d260b4a987aa82",
+      "lines": 82,
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
+    },
+    {
       "path": "backend/app/channels/manager.py",
       "source_state": "tracked_worktree",
-      "lines": 3734,
-      "sha256": "b74c0c767ece61bb8f5275aefce37b8899b27a559cfa952594f31106bc2e985c",
-      "snapshot_date": "2026-10-22",
-      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 3702,
+      "sha256": "e6e87231739c0a1801a9618c19152cc835f6406355ed88ffefda25dc90176f19",
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/channels/service.py",
@@ -75,17 +83,26 @@
     {
       "path": "backend/app/gateway/bug_codex_summary.py",
       "source_state": "untracked",
-      "lines": 549,
-      "sha256": "7c57ecc54fea38c20c38b60597ef2f1070452890a0aea17bc0541e6569a1bb39",
-      "snapshot_date": "2026-10-22",
-      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 568,
+      "sha256": "ab9d788e051c4025fbc85f95838a31751102e34b9c80392f9d678ad1087a7613",
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
+    },
+    {
+      "path": "backend/app/gateway/bug_git_delivery.py",
+      "source_state": "untracked",
+      "sha256": "a4724630b69bfcf9c670649ec5a5f622ebf1fe34f88375d820afbfab54aa41d5",
+      "lines": 644,
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_git_history_runtime.py",
       "source_state": "untracked",
-      "lines": 186,
-      "redactions": 0,
-      "sha256": "5a37d806a14e06fec2a052c799ab8bf18d138c047f773f1c9d62ffd85f757e92"
+      "lines": 195,
+      "sha256": "ddfa7f504a53470578f11d71df6e28bb509fa8ba6fe41dfd2fca95c750a11632",
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_investigator.py",
@@ -98,26 +115,26 @@
     {
       "path": "backend/app/gateway/bug_log_expert.py",
       "source_state": "tracked_worktree",
-      "lines": 246,
-      "sha256": "bb16224c31402c4138f2756db6d7efce8e52c973d54ebfbdedec606244a58eb7",
-      "snapshot_date": "2026-10-22",
-      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 277,
+      "sha256": "ac8ca0c493fa518c4b2614f9e1510499b131b889e372c5b16885b0fc62790e8d",
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_log_query_runtime.py",
       "source_state": "untracked",
-      "lines": 243,
-      "sha256": "1ab0aaf7fe16915822bba1eafb309dde86d6750063e3cc286ca0552566ea8a59",
-      "snapshot_date": "2026-10-22",
-      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 263,
+      "sha256": "88e7a9c7363c4500f19bd6cfd8a8cb04f1fea8bf327b79db4bab17133c5e0ee6",
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_note_repair.py",
       "source_state": "untracked",
-      "sha256": "cfb68f6ac41833eb05c5564560610ff4e1379a3bba6ebe0943ea8e853d161b29",
-      "lines": 340,
-      "snapshot_date": "2026-10-22",
-      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
+      "sha256": "2b53a83f3b0186c5a7bbd4665d2ab8472373be1199161182a76c8127c948c154",
+      "lines": 372,
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_rollback.py",
@@ -144,10 +161,10 @@
     {
       "path": "backend/app/gateway/bug_source_retrieval.py",
       "source_state": "untracked",
-      "lines": 2343,
-      "sha256": "3e20c6920f8863b9130aa829391f2f4d4a4701477527b2c432d8b10f8d7ffd26",
-      "snapshot_date": "2026-10-22",
-      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 1714,
+      "sha256": "2b1a2997ee031737c2f79eeff5765d068842dc381fa3f1275948fb51ff2a17ca",
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_source_view.py",
@@ -168,10 +185,10 @@
     {
       "path": "backend/app/gateway/bug_workflow.py",
       "source_state": "tracked_worktree",
-      "lines": 1998,
-      "sha256": "70b773cd51be2ecfca71161511c4dee1d9a25195279494b8c177ccaecef39b2a",
-      "snapshot_date": "2026-10-22",
-      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 2024,
+      "sha256": "1f05abe7185b984fe9bbc8c2ead80c7964afb73c12bf871a57cf1d5529fc0d8a",
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_workflow_events.py",
@@ -183,26 +200,26 @@
     {
       "path": "backend/app/gateway/bug_workflow_models.py",
       "source_state": "tracked_worktree",
-      "lines": 200,
-      "sha256": "0f1a94cdebdb35e7ad75661648b91196113e476e733c819180df90f794854c26",
-      "snapshot_date": "2026-10-22",
-      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 245,
+      "sha256": "a36e407d09c7aa37a7c8dd8f1cf5f4bf24e0b25d39c39c897280d34cdb09763e",
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/bug_workflow_state.py",
       "source_state": "tracked_worktree",
-      "lines": 247,
-      "sha256": "1ca91dadc5aefb0ffc2ef031ed2e5daaf401b743c3c3a291686b3164e58b930f",
-      "snapshot_date": "2026-10-22",
-      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 250,
+      "sha256": "fa09d21c6636fb7691a8d2be14e41505fee8559b99dcbeca7d1b00fd90d90073",
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/main_agent_bug_batch.py",
       "source_state": "untracked",
-      "lines": 572,
-      "sha256": "6178d6211d3516477b23f6395ea6ce294aeb1ad8dacabb4bbdf6069c841085db",
-      "snapshot_date": "2026-10-22",
-      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 625,
+      "sha256": "55c67397fad220eae7d9948f4aa327ff6e2d417ca667c595b936fb7b6130e8d5",
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/main_agent_bug_selection.py",
@@ -214,10 +231,10 @@
     {
       "path": "backend/app/gateway/main_agent_workbench.py",
       "source_state": "untracked",
-      "lines": 92,
-      "sha256": "d23e463864b664ccc7e34772f47e49cf76725693776d978597742290443c7eba",
-      "snapshot_date": "2026-10-22",
-      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 101,
+      "sha256": "04f22ec1ed2faa5483931cb14c70e31b6d3915a481e4abc2153c7f92609e9d15",
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/routers/__init__.py",
@@ -229,17 +246,18 @@
     {
       "path": "backend/app/gateway/routers/bug_workflows.py",
       "source_state": "tracked_worktree",
-      "lines": 642,
-      "sha256": "8192d2835c415ad0d3a2fff217df2947a84dfcf81b3957f56c1cd8666d400564",
-      "snapshot_date": "2026-10-22",
-      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 715,
+      "sha256": "ba5fc92360ff605510524585fe29639cc48efb44b83fdd7416c71a65a3b7f2ba",
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/routers/threads.py",
       "source_state": "tracked_worktree",
-      "lines": 1910,
-      "redactions": 0,
-      "sha256": "4ee9c7d5e6a480eb85be12ec8052aa2744bb432c27ca127ad6dc0e539a8c86f5"
+      "lines": 1921,
+      "sha256": "00e32d4fd44e3bddbc09ca3074d4b419e115263e96dcf9750a25b857b9a55979",
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/app/gateway/services.py",
@@ -258,10 +276,10 @@
     {
       "path": "backend/packages/harness/deerflow/agents/lead_agent/agent.py",
       "source_state": "tracked_worktree",
-      "lines": 1006,
-      "sha256": "ba4f0595306c915978774cae567a1220e6c2fcd47aa6c9e7d8cbbe80fec234b2",
-      "snapshot_date": "2026-10-22",
-      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 991,
+      "sha256": "04d66faf07a0b50c4f7925dedc7c35476b7b05aa7ebd8d198e4037bd0a244524",
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/packages/harness/deerflow/agents/lead_agent/prompt.py",
@@ -371,10 +389,10 @@
     {
       "path": "backend/packages/harness/deerflow/config/bug_analysis_config.py",
       "source_state": "tracked_worktree",
-      "lines": 123,
-      "sha256": "920e40dfb8f174c81f4efb90e6d251a0470773886b4439b57a4b920954316ea6",
-      "snapshot_date": "2026-10-22",
-      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 135,
+      "sha256": "b57724397909794a3292196dad9a6f94b64af0bbf6d2ab3509b59f643fc35dae",
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/packages/harness/deerflow/models/factory.py",
@@ -464,9 +482,10 @@
     {
       "path": "backend/packages/harness/deerflow/tools/builtins/main_agent_bug_batch_tools.py",
       "source_state": "untracked",
-      "lines": 113,
-      "redactions": 3,
-      "sha256": "dc082d0f899f68ba5eaaccd19d2856aedf320dc58ef4e0c4a80e703706f9eca4"
+      "lines": 112,
+      "sha256": "22f23bff5025dfeff451463461f4924884ab28a7d8f85d6f3c49769dcaf70de3",
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/packages/harness/deerflow/tools/builtins/read_bug_workbench_tool.py",
@@ -478,10 +497,10 @@
     {
       "path": "backend/packages/harness/deerflow/tools/builtins/start_bug_workbench_tool.py",
       "source_state": "untracked",
-      "lines": 35,
-      "sha256": "50bf2f3d9fa269c7245855fa7ee96833855da221e83a8c1948f40f666d2ec387",
-      "snapshot_date": "2026-10-22",
-      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 39,
+      "sha256": "38e43b715bbddbe9ecc0f4d3680f14651646b9a6d9dbb43ae76e7a1207a523aa",
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/packages/harness/deerflow/utils/oneshot_llm.py",
@@ -556,17 +575,18 @@
     {
       "path": "backend/scripts/bug_workflow/configure_tabby_context.py",
       "source_state": "untracked",
-      "lines": 80,
-      "redactions": 3,
-      "sha256": "5dd4e8f771deacaf6ad272fbe1e2866eca5fe17d00c34335eb32d3a0b26adc62"
+      "lines": 95,
+      "sha256": "de1e2b1b2f8ad6c63ccdd9642d76dc35329edd31c3178db1586aa46874c02538",
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/scripts/bug_workflow/evaluate_tabby_retrieval.py",
       "source_state": "untracked",
-      "lines": 230,
-      "sha256": "1a356f124a3fac4edb4ebc855e792816c13ba86f6a2ed05c177ad5e5339d9594",
-      "snapshot_date": "2026-10-22",
-      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 229,
+      "sha256": "af7fb38f505720ce53ac341b9701c4bd879e250d068c6234b0c149706a384900",
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "backend/scripts/bug_workflow/prepare_tabby_repositories.py",
@@ -608,10 +628,10 @@
     {
       "path": "config.example.yaml",
       "source_state": "tracked_worktree",
-      "lines": 2666,
-      "sha256": "22645cb0f4c3c049bb41470be7e5b1e595495c1abe674774b4fb32e408912575",
-      "snapshot_date": "2026-10-22",
-      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 2676,
+      "sha256": "9add9dc3a5b9767a32e377ed275166634f130b6d4b68701f71abc5e95eaefac1",
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "extensions_config.example.json",
@@ -644,10 +664,10 @@
     {
       "path": "frontend/src/app/workspace/bugs/page.tsx",
       "source_state": "tracked_worktree",
-      "lines": 1223,
-      "sha256": "f226a9826a4d41a263e18e2afa386c5b8a8d0b905c5b65809c0d0cbd95f1b73b",
-      "snapshot_date": "2026-10-22",
-      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 1333,
+      "sha256": "ab1118da04e12a4ad6e18a0877ef7a2661cbcd0b8bd500aac21247c724be8de0",
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "frontend/src/app/workspace/chats/page.tsx",
@@ -666,9 +686,10 @@
     {
       "path": "frontend/src/components/workspace/bugs/source-evidence-panel.tsx",
       "source_state": "untracked",
-      "lines": 258,
-      "redactions": 0,
-      "sha256": "7d52a29826b70d13ec858fa65009c4fbbeefadff319ccd72a8037c1d3a4fde8e"
+      "lines": 312,
+      "sha256": "8ca673133bb787e8d99f144416db628140423ed49be09fd0d5bb37af39a720bc",
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "frontend/src/components/workspace/bugs/video-clarification-card.tsx",
@@ -722,18 +743,18 @@
     {
       "path": "frontend/src/core/bugs/api.ts",
       "source_state": "tracked_worktree",
-      "lines": 555,
-      "sha256": "6ee093f8481f978758ea7859d68da4f56baee7b717d5f51a35575ad8d701a63e",
-      "snapshot_date": "2026-10-22",
-      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 631,
+      "sha256": "a5f0cb159319415ec61ed2bff7287e74ef6e18b23958661b7b1fe3c0affe24ae",
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "frontend/src/core/bugs/workbench.ts",
       "source_state": "tracked_worktree",
-      "lines": 199,
-      "sha256": "409734279d9ced0cb7bfc1d6cbe296e0bddd88306e1013ff922697d68352ef12",
-      "snapshot_date": "2026-10-22",
-      "sanitization": "Reviewed fictional identifiers and runtime-data exclusion; hash describes the public copy."
+      "lines": 215,
+      "sha256": "119e452ee3c2490a084d4a22eedc3eb481db98fc8730fe582740a2e5c1518a73",
+      "snapshot_date": "2026-11-06",
+      "sanitization": "Reviewed fictional identifiers, operator-only scope and runtime-data exclusion; hash describes the public copy."
     },
     {
       "path": "frontend/src/core/feishu-conversations/api.ts",
@@ -806,11 +827,13 @@
       "sha256": "9c3252a28bc7725cc9a0642f1daeed9eab7838608bf26ee750d922035e058a70"
     }
   ],
-  "scope_note": "Incremental Bug Workbench refresh; independent railway, exam and mini-program applications excluded.",
+  "scope_note": "Incremental Bug Workbench refresh; coworker executor, device pairing, remote queues and independent applications excluded.",
   "showcase_adjustments": [
-    "Enterprise names, repository conventions, WIKI adapter names and connection fields replaced by fictional examples.",
-    "Retired visual-model implementation removed at author request; direct ephemeral Codex visual extraction retained.",
-    "Optional scoped report-section repair and bidirectional snapshots included; repair remains disabled in the public example.",
-    "Runtime-log records selected through a private index; no credentials, knowledge content, source mirrors, tickets, snapshots or log indexes included."
+    "Enterprise identities, repositories, URLs, source conventions and WIKI adapter names replaced with fictional examples.",
+    "No source mirrors, private Agent files, business knowledge, credentials, real patches, tickets, indexes or delivery runtime records included.",
+    "Coworker executor, device pairing and remote queues excluded from modules, routes, prompts and channel dispatch.",
+    "Operator-local Git delivery retained as source design; repair and relay disabled, remote URL null, submit identity fictional.",
+    "Public-only safeguards reject all delivery entry points when relay configuration is disabled or missing, including historical records; Feishu host fetch/submit requires exact nonempty operator identity.",
+    "Codex-only ephemeral visual extraction retained; no retired visual model implementation."
   ]
 }

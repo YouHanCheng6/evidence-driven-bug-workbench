@@ -59,6 +59,21 @@ def main() -> int:
         f"api_endpoint = {_toml_string(args.embedding_endpoint.rstrip('/'))}",
         'api_key = "local-loopback"',
         "",
+        "[[additional_languages]]",
+        'languages = ["arkts"]',
+        'exts = ["ets"]',
+        'line_comment = "//"',
+        "",
+        "[[additional_languages]]",
+        'languages = ["objective-c"]',
+        'exts = ["m", "mm"]',
+        'line_comment = "//"',
+        "",
+        "[[additional_languages]]",
+        'languages = ["swift"]',
+        'exts = ["swift"]',
+        'line_comment = "//"',
+        "",
     ]
     for name, path in repositories.items():
         lines.extend(

@@ -29,13 +29,17 @@ import {
   acceptBugWorkflow,
   createBugWorkflow,
   fetchBugWorkflow,
+  fetchLatestBugWorkflow,
+  fetchBugWorkflowForTest,
   retryBugWorkflowNote,
   rollbackBugWorkflow,
   restoreBugWorkflow,
+  submitBugWorkflowChanges,
   submitBugWorkflowClarification,
   type BugWorkflow,
 } from "@/core/bugs/api";
 import {
+  canSubmitBugWorkflow,
   getBugEvidenceAssetStatusLabel,
   getBugCodeChangeAction,
   getBugWorkflowStep,
@@ -50,7 +54,7 @@ import { cn } from "@/lib/utils";
 const workflowSteps = [
   { label: "读取禅道", icon: FileSearch },
   { label: "准备辅助线索", icon: GitPullRequest },
-  { label: "Bug Workbench 调查", icon: FileSearch },
+  { label: "example_user 调查", icon: FileSearch },
   { label: "总结与修改意见", icon: ClipboardCheck },
   { label: "写入禅道备注", icon: ClipboardCheck },
   { label: "交付完成", icon: CheckCircle2 },
@@ -83,6 +87,8 @@ export default function BugWorkbenchPage() {
   const [starting, setStarting] = useState(false);
   const [submittingClarification, setSubmittingClarification] = useState(false);
   const [submittingAcceptance, setSubmittingAcceptance] = useState(false);
+  const [submittingDelivery, setSubmittingDelivery] = useState(false);
+  const [fetchingForTest, setFetchingForTest] = useState(false);
   const [retryingNote, setRetryingNote] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const normalizedBugId = normalizeBugId(rawBugId);
@@ -92,6 +98,7 @@ export default function BugWorkbenchPage() {
     workflow?.status === "writing_note" ||
     workflow?.status === "repairing";
   const codeChangeAction = getBugCodeChangeAction(workflow);
+  const canSubmitChanges = canSubmitBugWorkflow(workflow);
   const shouldPoll =
     workflow !== null &&
     ![
@@ -121,26 +128,37 @@ export default function BugWorkbenchPage() {
       routeWorkflowId,
       window.localStorage.getItem(LAST_WORKFLOW_STORAGE_KEY),
     );
-    if (!workflowId) return;
     let cancelled = false;
     setError(null);
     setWorkflow(null);
     setSubmittedBugId(null);
-    window.localStorage.setItem(LAST_WORKFLOW_STORAGE_KEY, workflowId);
-    void fetchBugWorkflow(workflowId)
-      .then((restoredWorkflow) => {
-        if (cancelled) return;
-        setWorkflow(restoredWorkflow);
-        setSubmittedBugId(String(restoredWorkflow.bug_id));
-      })
-      .catch(() => {
-        if (cancelled) return;
+    if (workflowId) {
+      window.localStorage.setItem(LAST_WORKFLOW_STORAGE_KEY, workflowId);
+    }
+    async function restoreWorkflow() {
+      if (!workflowId) return fetchLatestBugWorkflow();
+      try {
+        return await fetchBugWorkflow(workflowId);
+      } catch {
         if (
           window.localStorage.getItem(LAST_WORKFLOW_STORAGE_KEY) === workflowId
         ) {
           window.localStorage.removeItem(LAST_WORKFLOW_STORAGE_KEY);
         }
-      });
+        return fetchLatestBugWorkflow();
+      }
+    }
+    void restoreWorkflow()
+      .then((restoredWorkflow) => {
+        if (cancelled || !restoredWorkflow) return;
+        setWorkflow(restoredWorkflow);
+        setSubmittedBugId(String(restoredWorkflow.bug_id));
+        window.localStorage.setItem(
+          LAST_WORKFLOW_STORAGE_KEY,
+          restoredWorkflow.id,
+        );
+      })
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
@@ -256,6 +274,50 @@ export default function BugWorkbenchPage() {
     }
   }
 
+  async function submitChanges() {
+    if (!workflow) return;
+    const companyTarget = [
+      workflow.relay_delivery?.company_remote_url,
+      workflow.relay_delivery?.company_branch,
+    ]
+      .filter(Boolean)
+      .join(" / ");
+    const confirmed = window.confirm(
+      `确认 Bug #${workflow.bug_id} 已测试通过，并在个人本地代码库提交、拉取公司代码后推送到${companyTarget ? ` ${companyTarget}` : "公司正式仓库"}？\n\n系统会提交本次修复文件当前的全部修改；其他文件的未提交修改会保留。`,
+    );
+    if (!confirmed) return;
+    setSubmittingDelivery(true);
+    setError(null);
+    try {
+      setWorkflow(await submitBugWorkflowChanges(workflow.id));
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "本次代码提交未完成。",
+      );
+    } finally {
+      setSubmittingDelivery(false);
+    }
+  }
+
+  async function fetchForLocalTest() {
+    if (!workflow) return;
+    setFetchingForTest(true);
+    setError(null);
+    try {
+      setWorkflow(await fetchBugWorkflowForTest(workflow.id));
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "本次修改未能拉取到个人本地代码库。",
+      );
+    } finally {
+      setFetchingForTest(false);
+    }
+  }
+
   return (
     <WorkspaceContainer>
       <WorkspaceHeader />
@@ -359,7 +421,7 @@ export default function BugWorkbenchPage() {
                         ? "Codex 调查中"
                         : workflow?.status === "analyzing" &&
                             workflow.analysis_engine === "openhands"
-                          ? "Bug Workbench 调查中"
+                          ? "example_user 调查中"
                           : getBugWorkflowStatusLabel(
                               workflow?.status,
                               workflow?.clarification_type,
@@ -527,9 +589,7 @@ export default function BugWorkbenchPage() {
                   ) : workflow?.analysis_engine === "openhands" ? (
                     <div className="mt-5 rounded-xl border p-4 text-sm">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="font-medium">
-                          Bug Workbench 主调查 Agent
-                        </p>
+                        <p className="font-medium">example_user 主调查 Agent</p>
                         <Badge variant="outline">
                           {getOpenHandsInvestigationStatusLabel(
                             workflow.external_execution_status,
@@ -540,7 +600,7 @@ export default function BugWorkbenchPage() {
                         当前模型：
                         {workflow.external_models?.length
                           ? workflow.external_models.join("、")
-                          : "等待 Bug Workbench 上报"}
+                          : "等待 example_user 上报"}
                         {workflow.external_conversation_id
                           ? ` · 会话 ${workflow.external_conversation_id}`
                           : ""}
@@ -775,7 +835,7 @@ export default function BugWorkbenchPage() {
                     <div className="mt-5 rounded-xl border p-4 text-sm">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <p className="font-medium">
-                          Bug Workbench OpenHands 修复
+                          example_user OpenHands 修复
                         </p>
                         <Badge variant="outline">
                           {workflow.external_repair_execution_status ??
@@ -786,7 +846,7 @@ export default function BugWorkbenchPage() {
                         模型：
                         {workflow.external_repair_models?.length
                           ? workflow.external_repair_models.join("、")
-                          : "等待 Bug Workbench 上报"}
+                          : "等待 example_user 上报"}
                       </p>
                       <dl className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
                         <div>
@@ -1064,7 +1124,7 @@ export default function BugWorkbenchPage() {
                       : workflow?.analysis_engine === "codex"
                         ? "Codex 四段分析结论"
                         : workflow?.analysis_engine === "openhands"
-                          ? "Bug Workbench 分析结论"
+                          ? "example_user 分析结论"
                           : "完整专项分析报告"}
                   </div>
                   <Badge variant="outline">
@@ -1193,6 +1253,56 @@ export default function BugWorkbenchPage() {
                     历史回退未保存修改后的内容，无法恢复。
                   </p>
                 ) : null}
+                {workflow?.git_delivery ? (
+                  <pre className="text-muted-foreground bg-muted/20 mt-4 whitespace-pre-wrap break-words rounded-xl border border-dashed p-4 font-sans text-sm leading-6">
+                    {workflow.git_delivery.report}
+                  </pre>
+                ) : null}
+                {workflow?.relay_delivery?.status === "published" &&
+                !workflow?.git_delivery?.commit ? (
+                  <div className="mt-4 rounded-xl border p-4">
+                    <p className="text-muted-foreground mb-3 text-sm">
+                      把中转修改写入你的个人本地代码库当前分支，保持未提交；不会创建或切换分支。
+                    </p>
+                    <Button
+                      variant="outline"
+                      disabled={
+                        fetchingForTest ||
+                        workflow.local_test_delivery?.status === "applied"
+                      }
+                      onClick={() => void fetchForLocalTest()}
+                    >
+                      {fetchingForTest
+                        ? "正在拉取"
+                        : workflow.local_test_delivery?.status === "applied"
+                          ? "已拉取到个人本地代码库"
+                          : "拉取到个人本地代码库"}
+                    </Button>
+                    {workflow.local_test_delivery?.report ? (
+                      <pre className="text-muted-foreground bg-muted/20 mt-3 whitespace-pre-wrap break-words rounded-lg border border-dashed p-3 font-sans text-sm leading-6">
+                        {workflow.local_test_delivery.report}
+                      </pre>
+                    ) : null}
+                  </div>
+                ) : null}
+                {canSubmitChanges ? (
+                  <div className="mt-4 rounded-xl border p-4">
+                    <p className="text-muted-foreground mb-3 text-sm">
+                      仅在个人本地代码库中的修改测试通过后操作。系统会先提交本次
+                      Bug 修改，再拉取公司代码并推送；其他未提交修改会保留。
+                    </p>
+                    <Button
+                      disabled={submittingDelivery}
+                      onClick={() => void submitChanges()}
+                    >
+                      {submittingDelivery
+                        ? "正在提交、拉取并推送"
+                        : workflow?.git_delivery?.status === "push_failed"
+                          ? "重试推送"
+                          : "提交、拉取并推送到公司正式仓库"}
+                    </Button>
+                  </div>
+                ) : null}
                 {workflow?.error ? (
                   <p className="text-destructive mt-4 flex items-center gap-2 text-sm">
                     <TriangleAlert className="size-4" /> {workflow.error}
@@ -1205,7 +1315,7 @@ export default function BugWorkbenchPage() {
               <FileSearch className="text-primary mx-auto size-8" />
               <h2 className="mt-3 font-medium">从一个禅道 Bug 开始</h2>
               <p className="text-muted-foreground mt-1 text-sm">
-                输入 Bug ID 后，Bug Workbench
+                输入 Bug ID 后，example_user
                 完成源码调查，生成四段结论并确认禅道备注，再按配置执行明确的本地修改并反馈文件清单。
               </p>
             </section>

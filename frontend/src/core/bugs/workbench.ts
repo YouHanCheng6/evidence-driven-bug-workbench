@@ -6,6 +6,7 @@ export function getBugCodeChangeAction(
   workflow: BugWorkflow | null,
 ): "rollback" | "restore" | null {
   if (
+    Boolean(workflow?.git_delivery?.commit) ||
     !workflow?.rollback?.available ||
     ![
       "note_written",
@@ -20,6 +21,21 @@ export function getBugCodeChangeAction(
   if (workflow.rollback.completed)
     return workflow.rollback.restorable ? "restore" : null;
   return "rollback";
+}
+
+export function canSubmitBugWorkflow(workflow: BugWorkflow | null): boolean {
+  if (
+    !workflow?.rollback?.available ||
+    workflow.rollback.completed ||
+    workflow.relay_delivery?.status !== "published" ||
+    workflow.local_test_delivery?.status !== "applied" ||
+    workflow.git_delivery?.status === "submitted"
+  ) {
+    return false;
+  }
+  return ["note_written", "awaiting_acceptance", "accepted", "failed"].includes(
+    workflow.status,
+  );
 }
 
 export type BugEvidenceAssetStatus =
@@ -64,9 +80,9 @@ export function getBugWorkflowStatusLabel(
 ): string {
   switch (status) {
     case "routing":
-      return "Bug Workbench 正在整理事实";
+      return "example_user 正在整理事实";
     case "analyzing":
-      return "Bug Workbench 正在调查源码";
+      return "example_user 正在调查源码";
     case "awaiting_evidence":
       return "旧任务只读";
     case "awaiting_clarification":

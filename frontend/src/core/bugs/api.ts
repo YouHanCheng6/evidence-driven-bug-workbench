@@ -234,6 +234,7 @@ export type BugWorkflow = {
     provider?: string;
     repository?: string;
     source_revision?: string;
+    query?: string;
     status?: "ready" | "no_match" | "disabled" | "unavailable" | string;
     reason?: string;
     entries?: Array<{
@@ -246,8 +247,8 @@ export type BugWorkflow = {
       current_source_verified?: boolean;
       retrieval_stage?:
         | "exact_anchor"
-        | "concept_fallback"
-        | "concept_expansion"
+        | "exact_preparation"
+        | "tabby_hybrid"
         | "module_architecture"
         | string;
       candidate_kind?: "implementation" | "resource" | "other" | string;
@@ -262,17 +263,14 @@ export type BugWorkflow = {
       packet_chars?: number;
       anchor_count?: number;
       exact_anchors?: string[];
-      fallback_concept_count?: number;
-      fallback_concepts?: string[];
       product_scope_tokens?: string[];
       architecture_status?: string;
       architecture_model?: string;
       architecture_module_count?: number;
       retrieval_mode?:
-        | "exact_anchor"
-        | "concept_fallback"
-        | "module_architecture"
-        | "layered"
+        | "terra_query"
+        | "terra_exact_anchors"
+        | "terra_query_and_exact_anchors"
         | "none"
         | string;
       semantic_status?: string;
@@ -385,6 +383,49 @@ export type BugWorkflow = {
     restorable?: boolean;
     pending_action?: "rollback" | "restore" | null;
   } | null;
+  relay_delivery?: {
+    status:
+      | "published"
+      | "withdrawn"
+      | "push_failed"
+      | "sync_failed"
+      | "failed";
+    relay_remote?: string | null;
+    relay_url?: string | null;
+    relay_branch?: string | null;
+    test_commit?: string | null;
+    base_commit?: string | null;
+    company_remote?: string | null;
+    company_remote_url?: string | null;
+    company_branch?: string | null;
+    files?: string[];
+    subject?: string | null;
+    report: string;
+  } | null;
+  local_test_delivery?: {
+    status: "applied";
+    repository_path: string;
+    branch: string;
+    relay_commit: string;
+    base_commit: string;
+    relay_branch: string;
+    company_remote: string;
+    company_remote_url: string;
+    company_branch: string;
+    files?: string[];
+    subject: string;
+    report: string;
+  } | null;
+  git_delivery?: {
+    status: "conflict" | "failed" | "push_failed" | "submitted";
+    branch?: string | null;
+    remote?: string | null;
+    remote_branch?: string | null;
+    files?: string[];
+    commit?: string | null;
+    subject?: string | null;
+    report: string;
+  } | null;
   note_thread_id?: string | null;
   note_run_id?: string | null;
   note_content?: string | null;
@@ -486,6 +527,19 @@ export async function fetchBugWorkflow(
   );
 }
 
+export async function fetchLatestBugWorkflow(): Promise<BugWorkflow | null> {
+  const response = await fetch(
+    `${getBackendBaseURL()}/api/bug-workflows/latest`,
+  );
+  if (response.ok) return response.json() as Promise<BugWorkflow | null>;
+  const body = (await response.json().catch(() => ({}))) as {
+    detail?: string;
+  };
+  throw new Error(
+    body.detail ?? `Bug workflow request failed: ${response.status}`,
+  );
+}
+
 export async function acceptBugWorkflow(
   workflowId: string,
 ): Promise<BugWorkflow> {
@@ -516,6 +570,28 @@ export async function restoreBugWorkflow(
   return readWorkflow(
     await fetch(
       `${getBackendBaseURL()}/api/bug-workflows/${workflowId}/restore`,
+      { method: "POST" },
+    ),
+  );
+}
+
+export async function submitBugWorkflowChanges(
+  workflowId: string,
+): Promise<BugWorkflow> {
+  return readWorkflow(
+    await fetch(
+      `${getBackendBaseURL()}/api/bug-workflows/${workflowId}/submit`,
+      { method: "POST" },
+    ),
+  );
+}
+
+export async function fetchBugWorkflowForTest(
+  workflowId: string,
+): Promise<BugWorkflow> {
+  return readWorkflow(
+    await fetch(
+      `${getBackendBaseURL()}/api/bug-workflows/${workflowId}/fetch`,
       { method: "POST" },
     ),
   );

@@ -16,9 +16,10 @@ from pathlib import Path
 
 RUNTIME_NAME = ".deerflow-git-history.py"
 RESULT_PREFIX = "GIT_HISTORY_RESULT="
-MAX_COMMITS = 4
+METADATA_PREFIX = "GIT_HISTORY_COMMIT_METADATA="
+MAX_COMMITS = 8
 MAX_PATCH_CHARS = 2_400
-MAX_TOTAL_PATCH_CHARS = 6_000
+MAX_TOTAL_PATCH_CHARS = MAX_COMMITS * MAX_PATCH_CHARS
 
 
 def _emit(payload: dict[str, object]) -> None:
@@ -169,6 +170,14 @@ def _query(source_root_value: str, path_value: str, max_commits_value: int) -> i
             "diagnostics": [],
             "commits": commits,
         }
+    )
+    print(
+        METADATA_PREFIX
+        + json.dumps(
+            [{key: commit[key] for key in ("sha", "committed_at", "subject")} for commit in commits],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
     )
     return 0
 

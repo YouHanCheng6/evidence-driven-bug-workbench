@@ -94,6 +94,13 @@ bug_analysis:
     enabled: false
     model_name: example-repair-model
     timeout_seconds: 600
+  # Disabled public example: review your own remotes and commit identity first.
+  # No real relay URL, repository snapshot, patch, or credential ships here.
+  git_relay:
+    enabled: false
+    remote_url: null
+    remote_name: example_user
+    branch_prefix: bug
   # Private operator-owned JSON, relative to DEER_FLOW_HOME. Never publish
   # company rules with source code. Missing/invalid knowledge fails open.
   business_knowledge_file: knowledge/bug-business-rules.json
@@ -115,7 +122,6 @@ bug_analysis:
     timeout_seconds: 12
     max_candidates: 5
     max_anchor_queries: 8
-    max_fallback_concepts: 8
     max_raw_candidates: 32
     max_query_chars: 1600
     max_snippet_chars: 1800
@@ -135,9 +141,10 @@ bug_analysis:
     model_name: gpt-6-luna
     reasoning_effort: medium
   log_expert:
-    # A fresh read-only Codex turn searches a private index and selects source lines.
-    # The backend restores complete redacted original records, not model summaries.
-    model_name: gpt-6-luna
+    # One read-only preparation turn selects original source lines and supplies
+    # the direct Tabby semantic query plus up to eight exact original anchors.
+    # The backend restores full redacted records; no local query regeneration.
+    model_name: gpt-5.6-terra
     reasoning_effort: medium
   summary:
     # One local read-only Codex conversation investigates and writes the
@@ -2341,6 +2348,9 @@ run_ownership:
 #     # Workbench agents and ZenTao credentials. Feishu Bug IDs use this
 #     # account; ordinary Feishu chat retains the sender's normal identity.
 #     # bug_workbench_owner_user_id: your-shared-bug-service-user-id
+#     # Local operator authorization only (not device pairing). Empty denies
+#     # all Feishu fetch/submit operations on the service host's Git checkout.
+#     bug_workbench_server_local_open_id: ""
 #     # Public Bug Workbench page used in final Feishu result links.
 #     # Defaults to the local nginx entry; override it for remote deployments.
 #     # bug_workbench_url: https://deerflow.example.com/workspace/bugs

@@ -108,5 +108,9 @@ presentation/
 *wiki-mcp.json
 .deerflow-runtime-evidence/
 composite-repositories/
+# Deliberately excluded coworker executor, pairing service and distribution archive
+bug_remote_delivery.py
+bug_local_executor.py
+bug_local_executor.py.zip
 personal_rail/
 miniprogram-exam/

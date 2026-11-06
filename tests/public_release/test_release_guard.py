@@ -45,6 +45,12 @@ class ReleaseGuardTests(unittest.TestCase):
         (self.root / 'examplewiki-mcp.json').write_text('{}')
         self.assertTrue(guard.scan(self.root)[1])
 
+    def test_excluded_coworker_delivery_files_are_blocked(self):
+        names = ('bug_remote_delivery.py', 'bug_local_executor.py', 'bug_local_executor.py.zip')
+        for name in names:
+            (self.root / name).write_text('synthetic excluded module')
+        self.assertEqual(len(guard.scan(self.root)[1]), len(names))
+
     def test_private_corpus_and_log_index_are_blocked(self):
         for name in ('composite-repositories', '.deerflow-runtime-evidence'):
             folder = self.root / name

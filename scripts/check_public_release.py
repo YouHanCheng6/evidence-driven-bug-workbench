@@ -16,6 +16,7 @@ PRIVATE_DIRS = {'.deer-flow', '.openhands', '.claude', '.codex', 'source-views',
 RUNTIME_DIRS = {'uploads', 'secrets', 'logs'}
 PRIVATE_NAMES = {'.DS_Store', '.jwt_secret', 'config.yaml', 'extensions_config.json', 'mcp_config.json', 'credentials.json', 'auth.json', 'id_rsa', 'id_ed25519'}
 PRIVATE_SUFFIXES = {'.db', '.sqlite', '.sqlite3', '.log', '.pem', '.key', '.p12', '.pfx', '.mobileprovision'}
+EXCLUDED_SHOWCASE_NAMES = {'bug_remote_delivery.py', 'bug_local_executor.py', 'bug_local_executor.py.zip'}
 RULES = {
     'private key': re.compile(r'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----'),
     'API token': re.compile(r'\b(?:sk|rk|pk)-[A-Za-z0-9_-]{20,}\b'),
@@ -44,6 +45,8 @@ def scan(root: Path) -> tuple[int, list[str]]:
         if not path.is_file():
             continue
         scanned += 1
+        if path.name in EXCLUDED_SHOWCASE_NAMES:
+            findings.append(f'excluded coworker delivery file: {relative}')
         runtime_root = (relative.parts[0] in RUNTIME_DIRS or
                         (len(relative.parts) > 1 and relative.parts[0] in {'backend', 'frontend'} and relative.parts[1] in RUNTIME_DIRS))
         if PRIVATE_DIRS.intersection(relative.parts) or runtime_root:

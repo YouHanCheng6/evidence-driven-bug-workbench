@@ -14,10 +14,9 @@ from typing import BinaryIO
 MAX_LOG_TOTAL_BYTES = 512 * 1024 * 1024
 SEGMENT_BYTES = 64 * 1024
 LOG_QUERY_SCRIPT = ".deerflow-log-index.py"
-_JSON_FIELD = re.compile(r'"([A-Za-z][A-Za-z0-9_]{1,63})"\s*:')
-_PLAIN_FIELD = re.compile(r"(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9_]{1,63})\s*=")
-_JSON_VALUE = re.compile(r'"(?P<field>[A-Za-z][A-Za-z0-9_]{1,63})"\s*:\s*"(?P<value>[A-Za-z][A-Za-z0-9_]{2,127})"')
-_PLAIN_VALUE = re.compile(r'(?<![A-Za-z0-9_])(?P<field>[A-Za-z][A-Za-z0-9_]{1,63})\s*=\s*["\']?(?P<value>[A-Za-z][A-Za-z0-9_]{2,127})')
+DEFAULT_SEARCH_LIMIT = 50
+MAX_SEARCH_LIMIT = 200
+SEARCH_PREVIEW_CHARS = 800
 
 
 def search_key(value: str) -> str:
@@ -140,43 +139,53 @@ def search_records(path: Path, text: str, *, regex: bool = False) -> Iterator[di
                 yield record
 
 
-def discover_symbols(path: Path, text: str) -> Iterator[dict]:
-    """Summarize fields and symbolic values that directly contain the query."""
-    found: dict[tuple[str, str, str], dict] = {}
-    query = search_key(text)
-    for record in search_records(path, text):
-        raw = record["raw"]
-        names = {("field", "", match.group(1)) for pattern in (_JSON_FIELD, _PLAIN_FIELD) for match in pattern.finditer(raw) if query in search_key(match.group(1))}
-        for pattern in (_JSON_VALUE, _PLAIN_VALUE):
-            for match in pattern.finditer(raw):
-                field = match.group("field")
-                value = match.group("value")
-                if query not in search_key(field) and query not in search_key(value):
-                    continue
-                names.add(("field", "", field))
-                names.add(("value", field, value))
-        for key in names:
-            item = found.get(key)
-            if item is None:
-                found[key] = {
-                    "kind": key[0],
-                    "field": key[1],
-                    "name": key[2],
-                    "record_count": 1,
+def search_page(
+    path: Path,
+    text: str,
+    *,
+    regex: bool = False,
+    source: str | None = None,
+    first: int | None = None,
+    last: int | None = None,
+    offset: int = 0,
+    limit: int = DEFAULT_SEARCH_LIMIT,
+) -> tuple[dict, list[dict]]:
+    """Return a bounded page of matches without interpreting log fields."""
+    if offset < 0:
+        raise ValueError("offset cannot be negative")
+    if limit < 1 or limit > MAX_SEARCH_LIMIT:
+        raise ValueError(f"limit must be between 1 and {MAX_SEARCH_LIMIT}")
+    matches: list[dict] = []
+    total = 0
+    for record in search_records(path, text, regex=regex):
+        if source is not None and record["source"] != source:
+            continue
+        if first is not None and record["line"] < first:
+            continue
+        if last is not None and record["line"] > last:
+            continue
+        if offset <= total < offset + limit:
+            raw = record["raw"]
+            matches.append(
+                {
                     "source": record["source"],
                     "line": record["line"],
+                    "preview": raw[:SEARCH_PREVIEW_CHARS],
+                    "truncated": len(raw) > SEARCH_PREVIEW_CHARS,
                 }
-            else:
-                item["record_count"] += 1
-    yield from sorted(
-        found.values(),
-        key=lambda item: (
-            query not in search_key(item["name"]),
-            item["kind"] != "value",
-            -item["record_count"],
-            item["name"],
-            item["field"],
-        ),
+            )
+        total += 1
+    return (
+        {
+            "type": "search_page",
+            "query": text,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "returned": len(matches),
+            "next_offset": offset + len(matches) if offset + len(matches) < total else None,
+        },
+        matches,
     )
 
 
@@ -208,8 +217,11 @@ def main() -> int:
     search = commands.add_parser("search")
     search.add_argument("text", help="literal text to find across indexed log segments")
     search.add_argument("--regex", action="store_true", help="search complete lines with a regular expression")
-    symbols = commands.add_parser("symbols")
-    symbols.add_argument("text", help="literal text whose matching lines should reveal their actual field and event names")
+    search.add_argument("--source", help="restrict matches to one exact source name")
+    search.add_argument("--first", type=int, help="restrict matches to lines at or after this line")
+    search.add_argument("--last", type=int, help="restrict matches to lines at or before this line")
+    search.add_argument("--offset", type=int, default=0)
+    search.add_argument("--limit", type=int, default=DEFAULT_SEARCH_LIMIT)
     read = commands.add_parser("read")
     read.add_argument("source")
     read.add_argument("line", type=int)
@@ -223,10 +235,18 @@ def main() -> int:
         for record in list_sources(index):
             print(json.dumps(record, ensure_ascii=False))
     elif args.command == "search":
-        for record in search_records(index, args.text, regex=args.regex):
-            print(json.dumps(record, ensure_ascii=False))
-    elif args.command == "symbols":
-        for record in discover_symbols(index, args.text):
+        summary, records = search_page(
+            index,
+            args.text,
+            regex=args.regex,
+            source=args.source,
+            first=args.first,
+            last=args.last,
+            offset=args.offset,
+            limit=args.limit,
+        )
+        print(json.dumps(summary, ensure_ascii=False))
+        for record in records:
             print(json.dumps(record, ensure_ascii=False))
     elif args.command == "read":
         record = read_record(index, args.source, args.line)

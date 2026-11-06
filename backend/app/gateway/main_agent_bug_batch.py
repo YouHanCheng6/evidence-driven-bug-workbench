@@ -152,22 +152,81 @@ async def start_selected_bug_batch(
     runtime: Any,
     *,
     bug_ids: list[int] | None = None,
-    rerun: bool = False,
+    request_id: str | None = None,
 ) -> str:
-    """Start explicit current-turn IDs, otherwise the latest saved selection."""
+    """Start explicit current-turn IDs, otherwise the latest saved selection.
+
+    ``request_id`` scopes idempotency to one user turn/tool call. Repeating the
+    same Bug IDs in a later turn is a new request and therefore a new batch.
+    """
     try:
         thread_id, user_id, owner = _runtime_identity(runtime)
         store = make_thread_store(get_session_factory(), runtime.store)
+        return await _start_bug_batch(
+            store,
+            thread_id=thread_id,
+            user_id=user_id,
+            owner=owner,
+            bug_ids=bug_ids,
+            request_id=request_id,
+        )
+    except (ValueError, OSError) as exc:
+        return f"未启动批量分析：{exc}"
+
+
+async def start_explicit_bug_batch_from_channel(
+    *,
+    thread_id: str,
+    user_id: str,
+    owner: str,
+    bug_ids: list[int],
+    request_id: str,
+) -> str:
+    """Start one explicit IM request without asking the lead model to route it."""
+    store = make_thread_store(get_session_factory())
+    return await _start_bug_batch(
+        store,
+        thread_id=thread_id,
+        user_id=user_id,
+        owner=owner,
+        bug_ids=bug_ids,
+        request_id=request_id,
+    )
+
+
+async def _start_bug_batch(
+    store: ThreadMetaStore,
+    *,
+    thread_id: str,
+    user_id: str,
+    owner: str,
+    bug_ids: list[int] | None,
+    request_id: str | None,
+) -> str:
+    """Create one serial batch, idempotent only within one launch request."""
+    try:
         thread = await store.get(thread_id, user_id=user_id)
         metadata = thread.get("metadata") if isinstance(thread, dict) else None
+        launch_id = request_id.strip() if isinstance(request_id, str) and request_id.strip() else uuid.uuid4().hex
+        launch_digest = hashlib.sha256(f"{thread_id}:{launch_id}".encode()).hexdigest()
+        selection_id = "bug-selection-launch-" + launch_digest[:20]
+        batch_id = "bug-batch-" + launch_digest[:32]
+        existing_root = await store.get(batch_id, user_id=owner)
+        existing_state = existing_root.get("metadata", {}).get("bug_batch") if isinstance(existing_root, dict) else None
+        if isinstance(existing_state, dict):
+            return _batch_start_confirmation(
+                batch_id,
+                [int(item["bug_id"]) for item in existing_state.get("items", []) if isinstance(item, dict) and isinstance(item.get("bug_id"), int)],
+                selection_source=str(existing_state.get("selection_source") or "saved_selection"),
+                notification=("完成后会在当前飞书会话发送简短汇总" if existing_state.get("channel_source", {}).get("provider") == "feishu" else "完成后可向主 Agent 查询简短汇总"),
+            )
         if bug_ids is not None:
             ids = [identifier for identifier in bug_ids if isinstance(identifier, int) and not isinstance(identifier, bool) and identifier > 0]
             ids = list(dict.fromkeys(ids))
             if not ids:
                 return "当前消息的明确编号中没有有效的正整数；未回退到上次保存的集合，也未启动任务。"
-            identity = hashlib.sha256(",".join(str(identifier) for identifier in ids).encode()).hexdigest()[:20]
             selection = {
-                "id": f"bug-selection-explicit-{identity}",
+                "id": selection_id,
                 "source": "explicit_ids",
                 "bug_ids": ids,
                 "created_at": datetime.now(UTC).isoformat(),
@@ -184,16 +243,10 @@ async def start_selected_bug_batch(
             ids = list(dict.fromkeys(ids))
             if not ids:
                 return "本次选中 0 个 Bug，没有可启动的工作台任务。"
+            selection = {**selection, "id": selection_id, "source": "saved_selection"}
         selection_source = str(selection.get("source") or "saved_selection")
-        prior_id = metadata.get("zentao_bug_batch_id")
-        if isinstance(prior_id, str) and not rerun:
-            prior = await store.get(prior_id, user_id=owner)
-            prior_state = prior.get("metadata", {}).get("bug_batch") if isinstance(prior, dict) else None
-            if isinstance(prior_state, dict) and prior_state.get("selection_id") == selection.get("id"):
-                return f"这份集合已有批次 {prior_id}（{prior_state.get('status')}），不会重复启动；明确要求重新运行时才创建新批次。"
         source = metadata.get("channel_source")
         source = {key: source[key] for key in ("provider", "chat_id", "connection_id", "topic_id", "thread_ts") if isinstance(source, dict) and isinstance(source.get(key), str)}
-        batch_id = f"bug-batch-{uuid.uuid4().hex}"
         state: dict[str, Any] = {
             "id": batch_id,
             "selection_id": selection.get("id"),

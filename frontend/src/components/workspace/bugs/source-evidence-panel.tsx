@@ -1,13 +1,6 @@
 "use client";
 
-import {
-  Check,
-  ChevronDown,
-  CircleDot,
-  FileCode2,
-  Search,
-  Sparkles,
-} from "lucide-react";
+import { Check, ChevronDown, FileCode2, Search, Sparkles } from "lucide-react";
 import { useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -41,7 +34,8 @@ function scoreLabel(value: number | undefined): string {
 }
 
 function stageLabel(value: string | undefined): string {
-  if (value === "concept_fallback" || value === "concept_expansion") return "概念扩召回";
+  if (value === "tabby_hybrid") return "Terra 语义查询";
+  if (value === "exact_preparation") return "Terra 原文锚点";
   if (value === "module_architecture") return "模块装配解析";
   return "精确锚点";
 }
@@ -72,19 +66,18 @@ function Metric({ label, value }: { label: string; value: string | number }) {
 
 function EvidenceRail({ retrieval }: { retrieval: SourceRetrieval }) {
   const metrics = retrieval.metrics ?? {};
-  const conceptCount = metrics.fallback_concept_count ?? 0;
   const stages = [
     {
-      label: "精确锚点",
+      label: "Terra 调查输入",
+      value: `${metrics.query_chars ?? 0} 字符`,
+      icon: Sparkles,
+      active: (metrics.query_chars ?? 0) > 0,
+    },
+    {
+      label: "原文精确锚点",
       value: `${metrics.anchor_count ?? 0} 个`,
       icon: Search,
       active: (metrics.anchor_count ?? 0) > 0,
-    },
-    {
-      label: "概念扩召回",
-      value: conceptCount > 0 ? `${conceptCount} 个` : "无可用概念",
-      icon: CircleDot,
-      active: conceptCount > 0,
     },
     {
       label: "Embedding 重排",
@@ -101,8 +94,11 @@ function EvidenceRail({ retrieval }: { retrieval: SourceRetrieval }) {
   ];
 
   return (
-    <div className="relative grid gap-2 sm:grid-cols-4" aria-label="前置证据处理链路">
-      <div className="bg-border absolute top-5 right-[12.5%] left-[12.5%] hidden h-px sm:block" />
+    <div
+      className="relative grid gap-2 sm:grid-cols-4"
+      aria-label="前置证据处理链路"
+    >
+      <div className="bg-border absolute left-[12.5%] right-[12.5%] top-5 hidden h-px sm:block" />
       {stages.map((stage) => {
         const Icon = stage.icon;
         return (
@@ -118,11 +114,17 @@ function EvidenceRail({ retrieval }: { retrieval: SourceRetrieval }) {
                   : "border-border bg-muted text-muted-foreground",
               )}
             >
-              {stage.active ? <Check className="size-3.5" /> : <Icon className="size-3.5" />}
+              {stage.active ? (
+                <Check className="size-3.5" />
+              ) : (
+                <Icon className="size-3.5" />
+              )}
             </span>
             <div className="sm:mt-2">
               <p className="text-xs font-medium">{stage.label}</p>
-              <p className="text-muted-foreground mt-0.5 text-[11px]">{stage.value}</p>
+              <p className="text-muted-foreground mt-0.5 text-[11px]">
+                {stage.value}
+              </p>
             </div>
           </div>
         );
@@ -131,13 +133,16 @@ function EvidenceRail({ retrieval }: { retrieval: SourceRetrieval }) {
   );
 }
 
-export function SourceEvidencePanel({ retrieval }: { retrieval: SourceRetrieval }) {
+export function SourceEvidencePanel({
+  retrieval,
+}: {
+  retrieval: SourceRetrieval;
+}) {
   const [open, setOpen] = useState(false);
   const metrics = retrieval.metrics ?? {};
   const entries = retrieval.entries ?? [];
   const rejections = retrieval.rejections ?? [];
   const exactAnchors = metrics.exact_anchors ?? [];
-  const fallbackConcepts = metrics.fallback_concepts ?? [];
   const ready = retrieval.status === "ready" && entries.length > 0;
 
   return (
@@ -162,12 +167,16 @@ export function SourceEvidencePanel({ retrieval }: { retrieval: SourceRetrieval 
             </Badge>
           </div>
           <p className="text-muted-foreground mt-1 text-xs leading-5">
-            {retrieval.repository ?? "当前仓库"} · revision {compactRevision(retrieval.source_revision)} ·
+            {retrieval.repository ?? "当前仓库"} · revision{" "}
+            {compactRevision(retrieval.source_revision)} ·
             候选只用于导航，不代表已确认根因
           </p>
         </div>
         <ChevronDown
-          className={cn("text-muted-foreground mt-0.5 size-4 shrink-0 transition-transform", open && "rotate-180")}
+          className={cn(
+            "text-muted-foreground mt-0.5 size-4 shrink-0 transition-transform",
+            open && "rotate-180",
+          )}
         />
       </CollapsibleTrigger>
 
@@ -177,27 +186,47 @@ export function SourceEvidencePanel({ retrieval }: { retrieval: SourceRetrieval 
 
           <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
             <Metric label="原始候选" value={metrics.raw_candidate_count ?? 0} />
-            <Metric label="重排后" value={metrics.ranked_candidate_count ?? 0} />
-            <Metric label="交给 Codex" value={metrics.entry_count ?? entries.length} />
-            <Metric label="事实包字符" value={(metrics.packet_chars ?? 0).toLocaleString("zh-CN")} />
+            <Metric
+              label="重排后"
+              value={metrics.ranked_candidate_count ?? 0}
+            />
+            <Metric
+              label="交给 Codex"
+              value={metrics.entry_count ?? entries.length}
+            />
+            <Metric
+              label="事实包字符"
+              value={(metrics.packet_chars ?? 0).toLocaleString("zh-CN")}
+            />
           </div>
 
-          {exactAnchors.length || fallbackConcepts.length ? (
+          {retrieval.query || exactAnchors.length ? (
             <div className="mt-4 grid gap-3 lg:grid-cols-2">
               <div>
-                <p className="text-muted-foreground text-xs font-medium">精确搜索锚点</p>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {exactAnchors.length ? exactAnchors.map((anchor) => (
-                    <span className="bg-muted rounded-md px-2 py-1 font-mono text-[11px]" key={anchor}>{anchor}</span>
-                  )) : <span className="text-muted-foreground text-xs">无</span>}
-                </div>
+                <p className="text-muted-foreground text-xs font-medium">
+                  Terra 语义查询
+                </p>
+                <p className="bg-muted mt-2 whitespace-pre-wrap rounded-md px-2 py-1.5 text-xs leading-5">
+                  {retrieval.query ?? "无"}
+                </p>
               </div>
               <div>
-                <p className="text-muted-foreground text-xs font-medium">概念扩召回</p>
+                <p className="text-muted-foreground text-xs font-medium">
+                  原文精确锚点
+                </p>
                 <div className="mt-2 flex flex-wrap gap-1.5">
-                  {fallbackConcepts.length ? fallbackConcepts.map((concept) => (
-                    <span className="border-border rounded-md border px-2 py-1 text-[11px]" key={concept}>{concept}</span>
-                  )) : <span className="text-muted-foreground text-xs">无可用概念</span>}
+                  {exactAnchors.length ? (
+                    exactAnchors.map((anchor) => (
+                      <span
+                        className="bg-muted rounded-md px-2 py-1 font-mono text-[11px]"
+                        key={anchor}
+                      >
+                        {anchor}
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-muted-foreground text-xs">无</span>
+                  )}
                 </div>
               </div>
             </div>
@@ -206,46 +235,71 @@ export function SourceEvidencePanel({ retrieval }: { retrieval: SourceRetrieval 
           <div className="mt-4 space-y-2">
             <div className="flex items-center justify-between gap-3">
               <p className="text-xs font-medium">当前源码候选</p>
-              <span className="text-muted-foreground text-[11px]">按相关性排序，最多展示工作流保留的条目</span>
+              <span className="text-muted-foreground text-[11px]">
+                按相关性排序，最多展示工作流保留的条目
+              </span>
             </div>
-            {entries.length ? entries.map((entry, index) => (
-              <details className="group bg-muted/20 rounded-lg border px-3 py-2.5" key={`${entry.path ?? "candidate"}-${index}`}>
-                <summary className="cursor-pointer list-none">
-                  <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate font-mono text-xs font-medium">
-                        {entry.path ?? "未知文件"}{entry.entry_line ? `:${entry.entry_line}` : ""}
-                      </p>
-                      <p className="text-muted-foreground mt-1 text-[11px]">
-                        {stageLabel(entry.retrieval_stage)}
-                        {entry.symbol ? ` · 命中 ${entry.symbol}` : ""}
-                        {entry.product_scope && entry.product_scope !== "unspecified" ? ` · ${entry.product_scope}` : ""}
-                      </p>
+            {entries.length ? (
+              entries.map((entry, index) => (
+                <details
+                  className="bg-muted/20 group rounded-lg border px-3 py-2.5"
+                  key={`${entry.path ?? "candidate"}-${index}`}
+                >
+                  <summary className="cursor-pointer list-none">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="truncate font-mono text-xs font-medium">
+                          {entry.path ?? "未知文件"}
+                          {entry.entry_line ? `:${entry.entry_line}` : ""}
+                        </p>
+                        <p className="text-muted-foreground mt-1 text-[11px]">
+                          {stageLabel(entry.retrieval_stage)}
+                          {entry.symbol ? ` · 命中 ${entry.symbol}` : ""}
+                          {entry.product_scope &&
+                          entry.product_scope !== "unspecified"
+                            ? ` · ${entry.product_scope}`
+                            : ""}
+                        </p>
+                      </div>
+                      <Badge variant="secondary">
+                        相关度 {scoreLabel(entry.score)}
+                      </Badge>
                     </div>
-                    <Badge variant="secondary">相关度 {scoreLabel(entry.score)}</Badge>
-                  </div>
-                </summary>
-                {entry.snippet ? (
-                  <pre className="bg-background mt-3 max-h-64 overflow-auto rounded-md border p-3 text-[11px] leading-5 whitespace-pre-wrap">
-                    <code>{entry.snippet}</code>
-                  </pre>
-                ) : null}
-              </details>
-            )) : (
+                  </summary>
+                  {entry.snippet ? (
+                    <pre className="bg-background mt-3 max-h-64 overflow-auto whitespace-pre-wrap rounded-md border p-3 text-[11px] leading-5">
+                      <code>{entry.snippet}</code>
+                    </pre>
+                  ) : null}
+                </details>
+              ))
+            ) : (
               <div className="border-border bg-muted/20 rounded-lg border border-dashed px-3 py-4 text-xs leading-5">
-                没有候选通过当前源码校验。Codex 会从工单事实直接窄查，不会把空召回包装成证据。
+                没有候选通过当前源码校验。Codex
+                会从工单事实直接窄查，不会把空召回包装成证据。
               </div>
             )}
           </div>
 
           {rejections.length ? (
             <details className="mt-4 text-xs">
-              <summary className="text-muted-foreground cursor-pointer">查看 {rejections.length} 条淘汰记录</summary>
+              <summary className="text-muted-foreground cursor-pointer">
+                查看 {rejections.length} 条淘汰记录
+              </summary>
               <ul className="mt-2 space-y-1.5">
                 {rejections.map((item, index) => (
-                  <li className="flex gap-2" key={`${item.path ?? "rejection"}-${index}`}>
-                    <span className="min-w-0 flex-1 truncate font-mono">{item.path || "未知路径"}</span>
-                    <span className="text-muted-foreground shrink-0">{rejectionLabels[item.reason ?? ""] ?? item.reason ?? "未说明"}</span>
+                  <li
+                    className="flex gap-2"
+                    key={`${item.path ?? "rejection"}-${index}`}
+                  >
+                    <span className="min-w-0 flex-1 truncate font-mono">
+                      {item.path || "未知路径"}
+                    </span>
+                    <span className="text-muted-foreground shrink-0">
+                      {rejectionLabels[item.reason ?? ""] ??
+                        item.reason ??
+                        "未说明"}
+                    </span>
                   </li>
                 ))}
               </ul>
